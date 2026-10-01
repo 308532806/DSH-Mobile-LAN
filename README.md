@@ -7,6 +7,10 @@
 ![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
+<p align="center">
+  <img src="docs/promo/dsh-mobile-github.png" alt="DSH Mobile — DeepSeek Harness. Now in your pocket." width="100%">
+</p>
+
 [中文](#简介) · [English](README_EN.md)
 
 ---
