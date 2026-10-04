@@ -15,6 +15,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import app.dsh.mobile.engine.EngineConfig
+import app.dsh.mobile.engine.EngineOptions
 import app.dsh.mobile.engine.ExtensionManager
 import app.dsh.mobile.engine.LanGateway
 import app.dsh.mobile.engine.PrivMode
@@ -133,6 +134,12 @@ class SettingsActivity : Activity() {
             }
         }
         refreshNotifRow()
+
+        // —— 模型：默认开启思考强度 ——
+        findViewById<LinearLayout>(R.id.rowReasoning).setOnClickListener {
+            confirmToggleReasoning()
+        }
+        refreshReasoningRow()
 
         // —— 权限中心：局域网访问（LAN 模式） ——
         // 关闭状态点击 = 询问是否开启；开启状态点击 = 查看/复制访问地址
@@ -253,6 +260,7 @@ class SettingsActivity : Activity() {
         refreshNotifRow()
         refreshLanRow()
         refreshNoAuthRow()
+        refreshReasoningRow()
         refreshExt()
         // 缩放副标题文案无需变；图标着色按打开时状态由静态 XML 决定
     }
@@ -358,6 +366,49 @@ class SettingsActivity : Activity() {
         v.setTextColor(if (on) 0xFF6EE7B7.toInt() else 0xFF8A94A3.toInt())
         val clean = (application as DshApp).supervisor.lanUrl()
         sub.text = if (on && clean != null) clean else getString(R.string.setting_lan_no_auth_sub)
+    }
+
+    // ================= 模型：默认开启思考强度 =================
+
+    /**
+     * 开关确认。开着要提示代价：这个开关会改变**发往模型的请求形态** ——
+     * 给没声明思考档位的模型补上 low/medium/high，若供应商不认这个参数，
+     * 选了档位的请求会被对方拒绝（改回 off 即恢复）。
+     */
+    private fun confirmToggleReasoning() {
+        val on = EngineOptions.isDefaultReasoning(this)
+        if (on) {
+            applyReasoningChange(false)
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.default_reasoning_warn_title))
+            .setMessage(getString(R.string.default_reasoning_warn_msg))
+            .setNegativeButton(getString(android.R.string.cancel), null)
+            .setPositiveButton(getString(R.string.lan_dialog_enable)) { _, _ -> applyReasoningChange(true) }
+            .showStyled()
+    }
+
+    private fun applyReasoningChange(on: Boolean) {
+        EngineOptions.setDefaultReasoning(this, on)
+        // 档位是引擎启动时装配进模型目录的，必须重启引擎
+        (application as DshApp).supervisor.restart()
+        refreshReasoningRow()
+        Toast.makeText(
+            this,
+            getString(
+                R.string.lan_restart_hint,
+                getString(if (on) R.string.lan_on else R.string.lan_off),
+            ),
+            Toast.LENGTH_LONG,
+        ).show()
+    }
+
+    private fun refreshReasoningRow() {
+        val on = EngineOptions.isDefaultReasoning(this)
+        val v = findViewById<TextView>(R.id.valReasoning)
+        v.text = getString(if (on) R.string.lan_on else R.string.lan_off)
+        v.setTextColor(if (on) 0xFF6EE7B7.toInt() else 0xFF8A94A3.toInt())
     }
 
     // ================= 局域网访问（LAN 模式） =================

@@ -158,7 +158,16 @@ jobs:
             || { echo "::error::客户端环回判定被破坏"; exit 1; }
           node --check /tmp/wcl.js \
             || { echo "::error::注入后的 dsh-client-connection/lib/client.js 语法错误"; exit 1; }
-          echo "局域网补丁校验通过（host 受控 + 关闭回落回环 + lan url 日志 + 免 token 双闸门 + 设置可写 + JS 语法）"
+          # 默认思考档位补丁：必须真的进了 runtime.zip，且行为正确
+          unzip -p app/src/main/assets/runtime.zip \
+            'lib/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js' > /tmp/wr.js
+          grep -q 'DSH_DEFAULT_REASONING' /tmp/wr.js \
+            || { echo "::error::默认思考档位补丁未进入 runtime（自定义模型将没有思考强度选择）"; exit 1; }
+          node --check /tmp/wr.js \
+            || { echo "::error::注入后的 dsh-llm-pi-ai/lib/index.js 语法错误"; exit 1; }
+          node scripts/test-reasoning-default.js /tmp/wr.js \
+            || { echo "::error::默认思考档位行为不符合预期"; exit 1; }
+          echo "局域网补丁校验通过（host 受控 + 关闭回落回环 + lan url 日志 + 免 token 双闸门 + 设置可写 + 思考档位 + JS 语法）"
 
       - name: 回填 MANIFEST 版本与校验值
         run: |

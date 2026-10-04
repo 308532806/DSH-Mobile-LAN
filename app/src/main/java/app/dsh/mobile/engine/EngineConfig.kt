@@ -143,6 +143,8 @@ object EngineConfig {
             // 只在局域网开关打开时才有意义 —— 只监听回环时本来也没有外部访问者。
             if (LanGateway.isNoAuthEnabled(ctx)) env.add("DSH_LAN_NO_AUTH=1")
         }
+        // 默认思考档位：给没声明档位的模型补一套（见 scripts/patch-reasoning-default.py）
+        if (EngineOptions.isDefaultReasoning(ctx)) env.add("DSH_DEFAULT_REASONING=1")
         // Perl/Ruby：编译期 @INC/$LOAD_PATH 硬编码 Termux 前缀（重写 shebang 碰不到），
         // 注入扩展内的库路径（Agent 实测注入后 json/openssl 等模块恢复正常）
         val perlLibs = extRoots.flatMap { ext ->

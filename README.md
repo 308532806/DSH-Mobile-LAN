@@ -5,7 +5,7 @@
 **在手机上跑 DeepSeek Harness，同一 Wi-Fi 下的任何设备用浏览器直接打开使用。**
 
 [![CI](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml/badge.svg)](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml)
-![Release](https://img.shields.io/badge/release-v1.3.5--lan-blue)
+![Release](https://img.shields.io/badge/release-v1.3.6--lan-blue)
 ![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
@@ -154,7 +154,7 @@ const persistence = ctx.remote.$host.isLoopback ? "host" : "memory";
 
 即局域网来源**既能读也能写**设置。
 
-### 8. 上游同步与备选方案
+### 7. 上游同步与备选方案
 
 本 fork 会跟随上游（`upstream-sync` 工作流每 6 小时检查一次）。上游在 `1.2.48` 里
 **自己也实现了局域网访问**，做法与这里不同：
@@ -181,6 +181,24 @@ const persistence = ctx.remote.$host.isLoopback ? "host" : "memory";
 我们也吸收了上游发现的一个前端限制：`crypto.randomUUID` 在**非安全上下文**
 （`http://<私有IP>` 就是）可能不存在，缺失会让 RPC 发不出去、表现为"页面能开但点不动"。
 已加入 `patch-webview-polyfill.py`（用 `getRandomValues` 拼一个 RFC 4122 v4 UUID）。
+
+### 8. 默认开启思考强度（可选）
+
+dsh 把「思考强度」当作**每个模型自己声明的能力**：
+
+- 官方适配器（deepseek）会给出档位，所以模型选择器里有思考强度可选；
+- 自定义 / 手工声明的模型走 pi-ai，而 pi-ai 对"没声明档位"的模型报成**只有 `off` 一档**，
+  界面干脆不显示这个控件；上游的模型设置页也没有声明 `reasoningEfforts` 的表单
+  —— 结果是**自定义模型的思考强度选择永远出不来**（除非手改配置文件）。
+
+本 fork 加了一个开关（**设置 → 模型 → 默认开启思考强度**，默认关）：打开后，
+引擎会给这类模型补一套通行档位 `low / medium / high`（`off` 有意留空 —— pi-ai 把
+"缺席的 off"读作"支持，发送时不带该参数"，这正是"不思考"该有的请求形态），
+于是**所有模型**都有思考强度可选。
+
+不设该环境变量时行为与上游逐字一致；用户自己声明过档位的模型不受影响。
+之所以默认关闭：这会改变**发往供应商的请求形态** —— 若对方不认这个参数，
+选了档位的请求会被拒绝（改回「关闭」即恢复），所以应该由用户显式打开。
 
 ### 9. Root 检测修正
 
@@ -211,7 +229,7 @@ const persistence = ctx.remote.$host.isLoopback ? "host" : "memory";
 
 ```bash
 # 触发方式：推送 tag
-git tag v1.3.5-lan && git push origin v1.3.5-lan
+git tag v1.3.6-lan && git push origin v1.3.6-lan
 ```
 
 CI 流水线（`.github/workflows/android-build.yml`）会：

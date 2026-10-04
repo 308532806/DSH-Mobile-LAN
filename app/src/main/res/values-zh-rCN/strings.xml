@@ -253,4 +253,15 @@
     <string name="lan_no_auth_on">已开启</string>
     <string name="lan_no_auth_off">已关闭</string>
     <string name="lan_no_auth_disable">关闭免 token</string>
+
+    <!-- 模型：默认思考强度（本 fork 新增） -->
+    <string name="settings_section_model">模型</string>
+    <string name="setting_default_reasoning">默认开启思考强度</string>
+    <string name="setting_default_reasoning_sub">给每个模型都补上思考强度选择（手工声明的模型默认没有）</string>
+    <string name="default_reasoning_warn_title">给所有模型开启思考强度？</string>
+    <string name="default_reasoning_warn_msg">没有声明思考档位的模型（手工声明的都属于这类）目前完全不显示思考强度选择。打开后会给它们补上 低/中/高 以及「关闭」四档。
+
+这会改变发往供应商的请求形态：如果供应商不认这个参数，选了档位的请求会被拒绝 —— 把那个模型改回「关闭」即可恢复。
+
+只用官方/自带档位的供应商的话，不需要打开这个开关。</string>
 </resources>

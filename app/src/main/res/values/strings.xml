@@ -253,4 +253,15 @@ Current address:
     <string name="lan_no_auth_on">Enabled</string>
     <string name="lan_no_auth_off">Disabled</string>
     <string name="lan_no_auth_disable">Require token</string>
+
+    <!-- 模型：默认思考强度（本 fork 新增） -->
+    <string name="settings_section_model">Model</string>
+    <string name="setting_default_reasoning">Default reasoning effort</string>
+    <string name="setting_default_reasoning_sub">Give every model a reasoning-effort selector (hand-declared models have none by default)</string>
+    <string name="default_reasoning_warn_title">Enable reasoning effort for all models?</string>
+    <string name="default_reasoning_warn_msg">Models that do not declare their thinking levels (all hand-declared ones) currently show no effort selector at all. Turning this on gives them low / medium / high plus off.
+
+This changes what gets sent to the provider: if a provider rejects the parameter, requests that pick a level will fail — switching that model back to off restores it.
+
+If you only use providers that already declare their levels, you do not need this.</string>
 </resources>

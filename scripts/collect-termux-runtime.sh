@@ -134,6 +134,9 @@ if command -v python3 >/dev/null 2>&1; then
   # 并在就绪日志里补打一条带 token 的局域网地址。这个补丁**不允许**静默失败 ——
   # 它失败就意味着产物根本不支持局域网访问，直接让 CI 红掉，不发布假版本。
   python3 "$SCRIPTS_DIR/patch-lan-access.py" || exit 1
+  # 默认思考档位（App 侧开关控制，默认关）：给没声明档位的模型补一套，
+  # 让所有模型都有思考强度可选。同样不允许静默失败。
+  python3 "$SCRIPTS_DIR/patch-reasoning-default.py" || exit 1
 fi
 
 # [koffi] FFI 库：仅 glibc/x64 预编译。真实消费方只有 dsh-subprocess-local 的
