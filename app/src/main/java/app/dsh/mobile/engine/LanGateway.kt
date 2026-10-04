@@ -46,40 +46,59 @@ object LanGateway {
     /**
      * 本机当前的局域网 IPv4 地址；取不到返回 null。
      *
-     * 选择策略（按优先级）：
-     *  1. 站点内私有段 192.168/16、10/8、172.16/12 —— 家用/办公路由器的典型网段，
-     *     同一 Wi-Fi 下的设备都在这；
-     *  2. 100.64/10 等其它非环回、非链路本地地址 —— 部分共享网络/运营商 CGNAT、
-     *     以及 USB 网络共享（rndis 常是 192.168.42.x，已被 1 覆盖）；
-     *  3. 兜底取第一个可用地址。
+     * **必须按「接口名 + 网段」打分挑选，不能按枚举顺序取第一个** —— 真机实测：
+     * 手机上开着代理应用（如 NekoBox/sing-box）时会有 `tun0`，地址形如
+     * `172.19.0.1`，同样落在 RFC1918 私有段里。按顺序取第一个私有地址会把它
+     * 当成局域网地址显示，别的设备照这个地址连必然失败（用户实测踩过）。
      *
-     * 明确跳过：环回、链路本地 169.254（没 DHCP 时的自分配，不可用）、
-     * 以及 IPV6 地址（局域网互访用 IPv4 字面量最省事，免去浏览器里写方括号）。
+     * 规则：
+     *  - 接口名前缀 `wlan/eth/ap/rndis/usb` 视为真网卡（+100）；
+     *    `tun/tap/ppp/wg/ipsec/rmnet/...` 视为隧道或蜂窝（-100）；
+     *  - 网段分级 192.168/16(+30) > 10/8(+20) > 172.16-31/12(+10)；
+     *  - 跳过环回、链路本地 169.254（无 DHCP 时的自分配，不可用）与 IPv6
+     *    （局域网互访用 IPv4 字面量最省事，免去浏览器里写方括号）。
      */
     fun localIpv4(): String? = runCatching {
-        val candidates = NetworkInterface.getNetworkInterfaces().toList()
-            .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
-            .flatMap { nic -> nic.inetAddresses.toList().map { nic to it } }
-            .filter { (_, addr) ->
-                addr is Inet4Address && !addr.isLoopbackAddress && !addr.isLinkLocalAddress
+        val candidates = mutableListOf<Pair<String, String>>()   // (接口名, 地址)
+        for (nic in NetworkInterface.getNetworkInterfaces()) {
+            val usable = runCatching { nic.isUp && !nic.isLoopback }.getOrDefault(false)
+            if (!usable) continue
+            for (addr in nic.inetAddresses) {
+                if (addr !is Inet4Address) continue
+                if (addr.isLoopbackAddress || addr.isLinkLocalAddress) continue
+                val ip = addr.hostAddress.orEmpty()
+                if (ip.isEmpty()) continue
+                candidates += nic.name to ip
             }
-            .map { (nic, addr) -> nic.name to addr.hostAddress.orEmpty() }
-            .filter { (_, ip) -> ip.isNotEmpty() }
-
-        val (_, ip) = candidates.firstOrNull { (_, ip) -> isSiteLocal(ip) }
-            ?: candidates.firstOrNull()
-            ?: return@runCatching null
-        ip
+        }
+        candidates.maxByOrNull { (name, ip) -> scoreNic(name, ip) }?.second
     }.getOrNull()
 
-    /** 站点内私有段判定：192.168/16、10/8、172.16-31/12 */
-    private fun isSiteLocal(ip: String): Boolean {
-        val p = ip.split('.')
-        if (p.size != 4) return false
-        val a = p[0].toIntOrNull() ?: return false
-        val b = p[1].toIntOrNull() ?: return false
-        return (a == 192 && b == 168) || a == 10 || (a == 172 && b in 16..31)
+    /** 接口名是否像"真网卡"（Wi-Fi / 有线 / 热点 / USB 网络共享） */
+    private val lanNicRegex = Regex("^(wlan|eth|ap|softap|rndis|usb|swlan)", RegexOption.IGNORE_CASE)
+
+    /** 接口名是否像"隧道/虚拟/蜂窝"（VPN、PPP、WireGuard、蜂窝数据等） */
+    private val virtualNicRegex =
+        Regex("^(tun|tap|ppp|wg|ipsec|utun|rmnet|dummy|sit|gre|ip6tnl|clat|hwsim)", RegexOption.IGNORE_CASE)
+
+    /**
+     * 候选地址打分：接口名权重远高于网段（一台真网卡上的 10.x 也比隧道上的
+     * 192.168.x 更可能是用户想要的地址）。同分时由 maxByOrNull 取枚举靠前者。
+     */
+    private fun scoreNic(name: String, ip: String): Int {
+        var s = 0
+        if (lanNicRegex.containsMatchIn(name)) s += 100
+        else if (virtualNicRegex.containsMatchIn(name)) s -= 100
+        s += when {
+            ip.startsWith("192.168.") -> 30
+            ip.startsWith("10.") -> 20
+            IS_172_PRIVATE.containsMatchIn(ip) -> 10
+            else -> 0
+        }
+        return s
     }
+
+    private val IS_172_PRIVATE = Regex("^172\\.(1[6-9]|2\\d|3[01])\\.")
 
     /**
      * 从引擎日志里捞「本次启动」的局域网完整地址（带 token）。

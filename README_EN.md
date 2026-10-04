@@ -3,7 +3,7 @@
 **Run the DeepSeek Harness agent on your phone — and open it from any device on the same Wi-Fi.**
 
 [![CI](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml/badge.svg)](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml)
-![Release](https://img.shields.io/badge/release-v1.3.0--lan-blue)
+![Release](https://img.shields.io/badge/release-v1.3.1--lan-blue)
 ![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
@@ -77,9 +77,16 @@ dsh web: lan url: http://192.168.1.42:3080/?token=y7J8-jKAAv68FFnnzat1PXpxgcvSBp
 ```
 
 The App scrapes it from `engine.log` and surfaces it in Settings, the status bar
-and the notification, with one-tap copy. Address preference:
-`192.168/16` → `10/8` → `172.16/12` → any other non-loopback IPv4
-(skipping `169.254` link-local).
+and the notification, with one-tap copy. Address selection: interface name (`wlan/eth/ap/rndis/usb` count as real NICs;
+`tun/tap/ppp/wg/rmnet` as tunnels or cellular) combined with address range
+(`192.168/16` → `10/8` → `172.16/12`).
+
+> ⚠️ **Why "first private address" is wrong**: a proxy app (Clash / sing-box /
+> NekoBox) adds a `tun0` with an address like `172.19.0.1` — which is *also* inside
+> the RFC1918 space. Picking the first private address in enumeration order shows
+> the **VPN address** as the LAN address, and no other device can reach it.
+> That was v1.3.0's bug; v1.3.1 fixes it and adds a regression test
+> (`scripts/test-lan-pick.js`, run by CI on every build).
 
 ### 3. Changing networks restarts the engine
 
@@ -112,7 +119,7 @@ prefixes — there is no blanket `cleartextTrafficPermitted="true"`.
 everything goes through GitHub Actions:**
 
 ```bash
-git tag v1.3.0-lan && git push origin v1.3.0-lan
+git tag v1.3.1-lan && git push origin v1.3.1-lan
 ```
 
 The pipeline (`.github/workflows/android-build.yml`):

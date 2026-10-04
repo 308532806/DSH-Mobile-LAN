@@ -3,7 +3,7 @@
 **在手机上跑 DeepSeek Harness，同一 Wi-Fi 下的任何设备用浏览器直接打开使用。**
 
 [![CI](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml/badge.svg)](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml)
-![Release](https://img.shields.io/badge/release-v1.3.0--lan-blue)
+![Release](https://img.shields.io/badge/release-v1.3.1--lan-blue)
 ![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
@@ -69,8 +69,14 @@ dsh web: lan url: http://192.168.1.42:3080/?token=y7J8-jKAAv68FFnnzat1PXpxgcvSBp
 ```
 
 App 从 `engine.log` 里正则捞取，展示在设置页 / 状态栏 / 通知栏，并支持一键复制。
-地址选择优先级：`192.168/16` → `10/8` → `172.16/12` → 其它非环回地址
-（跳过 `169.254` 链路本地）。
+地址选择优先级：接口名（`wlan/eth/ap/rndis/usb` 视为真网卡，`tun/tap/ppp/wg/rmnet`
+视为隧道或蜂窝）+ 网段（`192.168/16` → `10/8` → `172.16/12`）。
+
+> ⚠️ **为什么不能"取第一个私有地址"**：手机上开着代理应用（Clash / sing-box /
+> NekoBox 等）时会多出一个 `tun0`，地址形如 `172.19.0.1` —— 它也落在 RFC1918
+> 私有段里。按枚举顺序取第一个私有地址，就会把 **VPN 的地址**当成局域网地址显示，
+> 别的设备照这个地址连必然失败。v1.3.0 就是这个 bug，v1.3.1 修掉了，
+> 并加了回归测试（`scripts/test-lan-pick.js`，CI 每次构建都会跑）。
 
 ### 3. 换网络就重启引擎
 
@@ -99,7 +105,7 @@ IP 会变，如果只把新 IP 显示给用户，设备打开会**页面能加�
 
 ```bash
 # 触发方式：推送 tag
-git tag v1.3.0-lan && git push origin v1.3.0-lan
+git tag v1.3.1-lan && git push origin v1.3.1-lan
 ```
 
 CI 流水线（`.github/workflows/android-build.yml`）会：

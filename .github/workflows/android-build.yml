@@ -33,6 +33,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 局域网选址逻辑回归测试：必须跑在打补丁之前 —— 选址错了（例如把 VPN 的
+      # tun0 地址当局域网地址显示）装机后才看得出来，而构建全绿。
+      # 测试直接执行补丁产物里注入的那段 JS，不重复实现逻辑。
+      - name: 校验局域网地址挑选逻辑
+        run: node scripts/test-lan-pick.js
+
       - name: 收集 Termux Node 运行时（${{ matrix.termux_arch }}）
         run: |
           sudo apt-get update -qq
