@@ -1,3 +1,8 @@
+// ⚠️ 必须显式导入 Base64：Gradle Kotlin DSL 里裸写 `java.util.Base64` 中的 `java`
+// 会被解析成 java 插件扩展（java { }）而不是包名 —— 会报 Unresolved reference: util。
+// import 必须放在 plugins 块之前（Kotlin 语法要求 import 先于其它语句）。
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -58,7 +63,7 @@ android {
                 signingConfig = signingConfigs.create("stable") {
                     val ks = File(project.layout.buildDirectory.asFile.get(), "stable-signing.jks")
                     ks.parentFile.mkdirs()
-                    ks.writeBytes(java.util.Base64.getDecoder().decode(b64))
+                    ks.writeBytes(Base64.getDecoder().decode(b64))
                     storeFile = ks
                     storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
                     keyAlias = System.getenv("ANDROID_KEY_ALIAS")
