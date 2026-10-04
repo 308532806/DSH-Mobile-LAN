@@ -18,8 +18,8 @@ android {
         // 关键决策：targetSdk 28 —— sideload 分发，豁免 Android 10+ 的 W^X 限制，
         // 允许从 filesDir 直接 execve bionic 二进制（Termux 同款策略）。
         targetSdk = 28
-        versionCode = 100
-        versionName = "1.3.3-lan"
+        versionCode = 101
+        versionName = "1.3.4-lan"
 
         ndk {
             abiFilters += listOf(targetAbi)
@@ -43,6 +43,28 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+        debug {
+            // 固定签名：CI 提供 ANDROID_KEYSTORE_BASE64 时用它替代 AGP 每次构建随机生成的
+            // debug 密钥；本地构建（无该环境变量）完全保持原样。
+            //
+            // 为什么必须固定：GitHub Actions 每次跑在全新 runner 上，AGP 会当场生成一个
+            // 随机 debug 密钥库 → 每个版本签名都不同 → 装新版必报“签名不一致”，
+            // 用户每次都得先卸载（数据全丢）。固定之后可以覆盖安装。
+            //
+            // 密钥以 base64 存在 GitHub Secret 里、不进仓库 —— 公开仓库放私钥等于
+            // 任何人都能伪造这个 App 的“官方更新”。
+            System.getenv("ANDROID_KEYSTORE_BASE64")?.let { b64 ->
+                signingConfig = signingConfigs.create("stable") {
+                    val ks = File(project.layout.buildDirectory.asFile.get(), "stable-signing.jks")
+                    ks.parentFile.mkdirs()
+                    ks.writeBytes(java.util.Base64.getDecoder().decode(b64))
+                    storeFile = ks
+                    storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                    keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                    keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+                }
+            }
         }
     }
 

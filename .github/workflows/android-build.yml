@@ -179,7 +179,38 @@ jobs:
           gradle-version: "8.9"
 
       - name: 构建 APK（${{ matrix.abi }}）
+        env:
+          # 固定签名密钥（GitHub Secrets）；缺失时回落到 AGP 默认 debug 签名。
+          # 没有它，每次构建都会生成新密钥 → 装新版报"签名不一致"。
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: gradle -p . assembleDebug -Pabi=${{ matrix.abi }} --stacktrace
+
+      # 断言签名确实是那把固定密钥：签名随构建变化会让用户被迫卸载重装，
+      # 而"构建全绿 + APK 正常 + 就是装不上"在装机前看不出来。
+      - name: 校验 APK 签名与固定密钥一致
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::warning::未配置签名 secret，本次 APK 使用随机 debug 签名（用户需卸载重装）"
+            exit 0
+          fi
+          echo "$KS_B64" | base64 -d > /tmp/verify-ks.jks
+          # keytool 输出 SHA256:AB:CD:…，apksigner 输出小写无分隔 —— 统一后再比
+          CERT=$(keytool -list -v -keystore /tmp/verify-ks.jks -storepass "$KS_PW" 2>/dev/null \
+                 | grep 'SHA256:' | head -1 | awk '{print $2}' | tr -d ':' | tr 'A-Z' 'a-z')
+          APKSIGNER=$(ls -d "${ANDROID_HOME:-/usr/local/lib/android/sdk}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          APK_CERT=$("$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk \
+                 | grep -i 'certificate SHA-256 digest' | head -1 | awk '{print $NF}' | tr -d ':' | tr 'A-Z' 'a-z')
+          echo "keystore: $CERT"
+          echo "apk     : $APK_CERT"
+          test -n "$CERT" && test "$CERT" = "$APK_CERT" \
+            || { echo "::error::APK 签名与固定密钥不一致 —— 用户将无法覆盖安装"; exit 1; }
+          echo "签名一致 ✓"
 
       # 防呆自检：真机 16KB 页内核上 p_align=4096 的 so 会 dlopen 失败
       # （v0.1.0-m1 真机「卡在启动中」事故根因）。所有 LOAD 段必须 >=16384。

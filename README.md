@@ -3,7 +3,7 @@
 **在手机上跑 DeepSeek Harness，同一 Wi-Fi 下的任何设备用浏览器直接打开使用。**
 
 [![CI](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml/badge.svg)](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml)
-![Release](https://img.shields.io/badge/release-v1.3.3--lan-blue)
+![Release](https://img.shields.io/badge/release-v1.3.4--lan-blue)
 ![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
@@ -181,7 +181,7 @@ const persistence = ctx.remote.$host.isLoopback ? "host" : "memory";
 
 ```bash
 # 触发方式：推送 tag
-git tag v1.3.3-lan && git push origin v1.3.3-lan
+git tag v1.3.4-lan && git push origin v1.3.4-lan
 ```
 
 CI 流水线（`.github/workflows/android-build.yml`）会：
@@ -189,9 +189,36 @@ CI 流水线（`.github/workflows/android-build.yml`）会：
 1. `collect-runtime`：从 Termux 仓库收集 aarch64/x86_64 的 node 运行时，
    `npm install @deepseek-ai/dsh`（锁 `0.2.0-rc.2`）拉齐依赖闭包，
    应用全部 Android 适配补丁（含本项目的局域网补丁）；
-2. `build-apk`：把 runtime 注入 assets → `gradle assembleDebug` → **校验局域网补丁
-   确实进了 `runtime.zip`**（host 已改成受控表达式 + 日志行存在 + JS 语法通过）；
+2. `build-apk`：把 runtime 注入 assets → `gradle assembleDebug` → 用**固定密钥签名** →
+   断言补丁确实进了 `runtime.zip`、且 APK 签名与密钥一致；
 3. `release`：tag 触发时双架构 APK 一并发布。
+
+### 签名是固定的（可以覆盖安装）
+
+早期版本每个 APK 的签名都不一样 —— 因为 GitHub Actions 每次跑在全新 runner 上，
+AGP 会**当场随机生成一个调试密钥库**。后果是装新版必报「签名不一致」，
+每次都得先卸载（应用数据全丢）。
+
+现在 CI 用一把固定的发布密钥（RSA 4096，有效期到 2056 年）签名，密钥以 base64
+存在仓库的 GitHub Secret 里、**不进仓库**（公开仓库放私钥等于任何人都能伪造
+这个 App 的"官方更新"）。构建期还有一道断言：APK 签名必须等于该密钥，否则构建失败。
+
+所以：**卸载一次旧版**（它用的是随机密钥，无法覆盖），装上本版之后，
+后续所有版本的更新都能直接覆盖安装。
+
+## 自动跟随上游更新
+
+`.github/workflows/upstream-sync.yml` 每 6 小时检查一次上游：
+
+- **有新提交** → 合并进 `main` 并推送（合并前先跑补丁锚点测试）。
+  合并冲突只自动解决"版本号"这一处必然冲突（上游每次发版都会改版本号，
+  而本 fork 有自己的版本序列）；**其它任何冲突一律中止并报错**，不猜、不硬合 ——
+  猜错的代价是把补丁悄悄改坏。
+- **上游发了新 Release** → 自动升版本号、打 tag，触发构建与发布。
+
+失败时看 Actions 页面的红色运行：合并失败 = 上游改到了我们也在改的文件；
+合并成功但构建失败 = 上游改了补丁锚点（构建期断言会明确报出是哪一个）。
+
 
 ---
 

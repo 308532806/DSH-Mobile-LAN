@@ -1,0 +1,133 @@
+name: upstream-sync
+
+# 自动跟随上游 Soodok/Deepseek-Harness-Local-Android 的更新。
+#
+# 策略：
+#   · 每 6 小时检查一次上游 main；有新提交就合并进来并推送（保持 fork 不落后）
+#   · 合并时只自动解决"版本号"这一处必然冲突；其它冲突一律中止并报错，
+#     不猜、不硬合 —— 猜错的代价是把补丁悄悄改坏
+#   · 上游**发新 Release** 时，才给我们自己打 tag 触发构建发布
+#     （否则上游每提交一次就发一个版本，太吵）
+#
+# 失败时怎么办：看 Actions 页面红色的那次运行。合并失败 = 上游改了和我们
+# 相同的文件；合并成功但构建失败 = 上游改了补丁锚点（构建期断言会明确报出来）。
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # 用默认 GITHUB_TOKEN 推回本仓库；上游是公开仓库，无需凭据
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 配置 git 身份
+        run: |
+          git config user.name "upstream-sync[bot]"
+          git config user.email "upstream-sync@users.noreply.github.com"
+
+      - name: 拉取上游
+        id: fetch
+        run: |
+          git remote add upstream https://github.com/Soodok/Deepseek-Harness-Local-Android.git 2>/dev/null || true
+          git fetch upstream --tags --force
+          git fetch upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "up_to_date=1" >> "$GITHUB_OUTPUT"
+            echo "上游无新提交"
+          else
+            echo "up_to_date=0" >> "$GITHUB_OUTPUT"
+            echo "上游有新提交："
+            git log --oneline HEAD..upstream/main | head -20
+          fi
+
+      - name: 合并上游（只自动解决版本号冲突）
+        if: steps.fetch.outputs.up_to_date == '0'
+        run: |
+          set +e
+          git merge upstream/main --no-edit
+          rc=$?
+          set -e
+          if [ $rc -eq 0 ]; then
+            echo "干净合并完成"
+            exit 0
+          fi
+          echo "出现冲突，检查是否是已知的版本号冲突…"
+          CONFLICTS=$(git diff --name-only --diff-filter=U | sort | tr '\n' ' ')
+          echo "冲突文件: $CONFLICTS"
+          if [ "$CONFLICTS" != "app/build.gradle.kts " ]; then
+            git merge --abort
+            echo "::error::上游修改与本地改动发生冲突（$CONFLICTS），需要人工处理后再同步"
+            exit 1
+          fi
+          # 版本号冲突：取上游的声明，稍后由 bump 脚本重新盖上我们的版本号
+          git checkout --theirs -- app/build.gradle.kts
+          git add app/build.gradle.kts
+          git commit --no-edit
+          echo "已自动解决版本号冲突"
+
+      # 合并后先跑补丁锚点夹具测试：上游若改了 cordis.patch.yml 的形状，
+      # 这里就会红，而不是等到用户装上去发现功能没了
+      - name: 校验补丁锚点仍然可用
+        if: steps.fetch.outputs.up_to_date == '0'
+        run: node scripts/test-lan-pick.js
+
+      - name: 推送合并结果
+        if: steps.fetch.outputs.up_to_date == '0'
+        run: git push origin HEAD:main
+
+      # 只有上游发了新 Release 才给我们自己打版本号 + tag。
+      # 标记 tag 用 upstream/<tag> 形式（不以 v 开头，不会触发发布流程）
+      - name: 上游若有新 Release，则升版本并发布
+        if: steps.fetch.outputs.up_to_date == '0'
+        id: rel
+        run: |
+          UP_TAG=$(git tag --list 'v*' --sort=-v:refname | head -1)
+          echo "上游最新 release tag: $UP_TAG"
+          if [ -z "$UP_TAG" ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if git rev-parse -q --verify "refs/tags/upstream/$UP_TAG" >/dev/null; then
+            echo "已为 $UP_TAG 发过版本，跳过"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          NEW=$(python3 scripts/bump-lan-version.py)
+          echo "new_version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "up_tag=$UP_TAG" >> "$GITHUB_OUTPUT"
+          echo "skip=0" >> "$GITHUB_OUTPUT"
+          git add app/build.gradle.kts
+          git commit -m "chore(release): 跟随上游 $UP_TAG 发布 v$NEW"
+          git push origin HEAD:main
+
+      - name: 打 tag 触发构建发布
+        if: steps.rel.outputs.skip == '0'
+        run: |
+          git tag -a "v${{ steps.rel.outputs.new_version }}" -m "跟随上游 ${{ steps.rel.outputs.up_tag }}"
+          git tag -a "upstream/${{ steps.rel.outputs.up_tag }}" -m "已同步的上游版本标记"
+          git push origin "v${{ steps.rel.outputs.new_version }}"
+          git push origin "upstream/${{ steps.rel.outputs.up_tag }}"
+          echo "已触发 v${{ steps.rel.outputs.new_version }} 的构建发布"
+
+      - name: 结果小结
+        if: always()
+        run: |
+          {
+            echo "### upstream-sync 结果"
+            echo ""
+            if [ "${{ steps.fetch.outputs.up_to_date }}" = "1" ]; then
+              echo "- 上游无新提交，未做任何改动"
+            else
+              echo "- 已合并上游 main 并推送"
+            fi
+            if [ "${{ steps.rel.outputs.skip }}" = "0" ]; then
+              echo "- 已发布 **v${{ steps.rel.outputs.new_version }}**（对应上游 ${{ steps.rel.outputs.up_tag }}）"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
