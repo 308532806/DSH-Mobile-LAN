@@ -1,0 +1,24 @@
+# 统一换行符：上游用 CRLF（作者在 Windows 开发），本 fork 的编辑产生 LF。
+# 不统一的话，每次合并上游都会因为「整文件的换行符差异」产生假冲突 ——
+# 上游改了 3 行，git 却把整个文件标成冲突，人工逐个解决既费时又容易改错。
+#
+# text=auto eol=lf 的效果：
+#   · 仓库里一律存 LF（合并比较时也按 LF 归一化，于是 CRLF/LF 差异不再是冲突）
+#   · 检出到工作区也是 LF（本仓库在 Linux/Android 上构建与运行）
+* text=auto eol=lf
+
+# 二进制文件明确排除，禁止任何转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.apk binary
+*.aab binary
+*.jar binary
+*.jks binary
+*.keystore binary
+*.zip binary
+*.zst binary
+*.xz binary
+*.deb binary
