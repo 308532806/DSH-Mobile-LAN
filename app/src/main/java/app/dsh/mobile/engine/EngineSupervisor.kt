@@ -1,5 +1,7 @@
 package app.dsh.mobile.engine
 
+import app.dsh.mobile.R
+
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -177,10 +179,10 @@ class EngineSupervisor(private val ctx: Context) {
     fun restart() {
         val scope = scopeRef ?: return
         if (restarting) {
-            Log.i(TAG, "restart 进行中，忽略重复点击")
+            Log.i(TAG, "restart already in progress, ignoring duplicate tap")
             return
         }
-        Log.i(TAG, "restart: 用户请求热重启")
+        Log.i(TAG, "restart: hot restart requested by user")
         restarting = true
         val t0 = System.currentTimeMillis()
         restartStartedAt = t0
@@ -189,7 +191,7 @@ class EngineSupervisor(private val ctx: Context) {
                 _state.value = State.Starting
                 // 用户重启：3.5s 宽限（足够引擎落盘收尾；TERM 无响应时尽快 KILL，不再干等 10s）
                 stop(graceMs = 3_500)
-                Log.i(TAG, "restart: 旧引擎已停止（${System.currentTimeMillis() - t0}ms）")
+                Log.i(TAG, "restart: previous engine stopped (${System.currentTimeMillis() - t0}ms)")
                 _state.value = State.Starting   // stop() 会置 Stopped，重启路径立即回到启动中
                 start(scope)
             } catch (e: Exception) {
@@ -297,7 +299,7 @@ class EngineSupervisor(private val ctx: Context) {
                     // LAN 地址：日志里的 token 行就绪后才有值，与 tokenUrl 同源同序号
                     val lanUrl = extractLanUrl()
                     val t1 = System.currentTimeMillis()
-                    val restartMs = restartStartedAt?.let { "（本次重启总耗时 ${t1 - it}ms）" } ?: ""
+                    val restartMs = restartStartedAt?.let { " (total restart took ${t1 - it}ms)" } ?: ""
                     restartStartedAt = null
                     Log.i(TAG, (if (safe) "engine healthy in SAFE MODE on :${EngineConfig.DEFAULT_PORT}" else "engine healthy on :${EngineConfig.DEFAULT_PORT}") + restartMs)
                     if (lanUrl != null) Log.i(TAG, "LAN access ready: $lanUrl")
@@ -375,7 +377,7 @@ class EngineSupervisor(private val ctx: Context) {
             // 统一走退避重启
             backoffIndex++
             if (backoffIndex > EngineConfig.MAX_RESTART) {
-                _state.value = State.Failed("连续 ${EngineConfig.MAX_RESTART} 次启动失败，已停止自动重启")
+                _state.value = State.Failed(ctx.getString(R.string.error_restart_failed_streak, EngineConfig.MAX_RESTART))
                 return
             }
             val delayMs = EngineConfig.BACKOFF_STEPS[
@@ -410,7 +412,7 @@ class EngineSupervisor(private val ctx: Context) {
             Log.w(TAG, if (backup != null) "ROOT mode: dsh-home backed up to $backup" 
                   else "ROOT mode: WARNING — dsh-home backup failed")
             suPath = Privilege.findSu() ?: throw EngineStartException(
-                "Root 模式已选，但未找到可用的 su 可执行文件（设备可能未 root）"
+                ctx.getString(R.string.error_root_no_su)
             )
         }
         return EngineProcess.spawn(

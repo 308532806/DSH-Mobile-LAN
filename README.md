@@ -1,9 +1,11 @@
 # DSH Mobile · 局域网版
 
+[中文](#ds-h-mobile--局域网版) · [English](README_EN.md) · [Deutsch](README.de.md)
+
 **在手机上跑 DeepSeek Harness，同一 Wi-Fi 下的任何设备用浏览器直接打开使用。**
 
 [![CI](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml/badge.svg)](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml)
-![Release](https://img.shields.io/badge/release-v1.3.4--lan-blue)
+![Release](https://img.shields.io/badge/release-v1.3.5--lan-blue)
 ![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
@@ -152,7 +154,35 @@ const persistence = ctx.remote.$host.isLoopback ? "host" : "memory";
 
 即局域网来源**既能读也能写**设置。
 
-### 7. Root 检测修正
+### 8. 上游同步与备选方案
+
+本 fork 会跟随上游（`upstream-sync` 工作流每 6 小时检查一次）。上游在 `1.2.48` 里
+**自己也实现了局域网访问**，做法与这里不同：
+
+- 他们**不改 App**：引擎仍只监听 `127.0.0.1`，另发一个零依赖反代脚本
+  `scripts/dsh-lan-proxy.js`，在转发途中注入前端补丁（`crypto.randomUUID`
+  polyfill、把 `isLoopbackHostname` 改写成恒真、对齐 Origin/Host），
+  并把这套知识写进 AgentContextSeed，让 **AI 自己搭**。
+
+两种方案对比（本 fork 选前者，因为它对使用者是"设置里一个开关"）：
+
+| | 本 fork：引擎监听 0.0.0.0 | 上游：前置反代 |
+|---|---|---|
+| 使用者操作 | 设置页一个开关 | 让 AI 起一个脚本进程 |
+| 引擎代码 | 构建期补丁（失效则构建失败） | **完全不动** |
+| 前端补丁 | 打进产物，CI 断言兜底 | 运行期字符串替换（失效是静默的） |
+| 安全边界 | 无前置关口，靠 token / Host 栅栏 | 反代可加 Basic Auth |
+| 跟随上游 | 需要合并 | 无冲突 |
+
+**上游那个反代脚本已经随本 fork 一起带上**（`scripts/dsh-lan-proxy.js`），
+定位是备选：如果哪天要在**不完全可信的网络**里用，可以用它加一道 Basic Auth，
+而不是只能选"裸奔 or 不用"。
+
+我们也吸收了上游发现的一个前端限制：`crypto.randomUUID` 在**非安全上下文**
+（`http://<私有IP>` 就是）可能不存在，缺失会让 RPC 发不出去、表现为"页面能开但点不动"。
+已加入 `patch-webview-polyfill.py`（用 `getRandomValues` 拼一个 RFC 4122 v4 UUID）。
+
+### 9. Root 检测修正
 
 原项目的 root 检测只 stat 一组写死的 su 路径。真机实测（OPPO / Android 12 / Magisk alpha）
 上这些路径**全都不存在**：su 由 magic mount 挂到 `/product/bin/su` 与 `/debug_ramdisk/su`
@@ -181,7 +211,7 @@ const persistence = ctx.remote.$host.isLoopback ? "host" : "memory";
 
 ```bash
 # 触发方式：推送 tag
-git tag v1.3.4-lan && git push origin v1.3.4-lan
+git tag v1.3.5-lan && git push origin v1.3.5-lan
 ```
 
 CI 流水线（`.github/workflows/android-build.yml`）会：
