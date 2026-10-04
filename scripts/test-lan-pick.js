@@ -53,12 +53,21 @@ fs.writeFileSync(path.join(ymlDir, 'lib/index.js'), 'function x() {\n' + JS_ANCH
 const connDir = path.join(tmp, 'lib/node_modules/@deepseek-ai/dsh-client-connection/lib');
 fs.mkdirSync(connDir, { recursive: true });
 fs.writeFileSync(path.join(connDir, 'index.js'), CONN_ANCHOR);
+// 浏览器端：设置可用性依赖的 isLoopbackHostname（客户端按页面 hostname 判定）
+const CLIENT_ANCHOR =
+  '\t\tfunction isLoopbackHostname(hostname) {\n' +
+  '\t\t\tif (hostname === "localhost" || hostname === "[::1]") return true;\n' +
+  '\t\t\tconst parts = hostname.split(".");\n' +
+  '\t\t\treturn parts.length === 4 && parts[0] === "127" && parts.every((part) => /^\\d{1,3}$/.test(part) && Number(part) <= 255);\n' +
+  '\t\t}';
+fs.writeFileSync(path.join(connDir, 'client.js'), CLIENT_ANCHOR + '\n');
 
 execFileSync('python3', [PATCH], { env: { ...process.env, DSH_PATCH_TARGET: tmp } });
 
 const patched = fs.readFileSync(path.join(ymlDir, 'lib/index.js'), 'utf8');
 const patchedYml = fs.readFileSync(path.join(ymlDir, 'cordis.patch.yml'), 'utf8');
 const patchedConn = fs.readFileSync(path.join(connDir, 'index.js'), 'utf8');
+const patchedClient = fs.readFileSync(path.join(connDir, 'client.js'), 'utf8');
 
 // —— 抠出注入的代码块 ——
 const start = patched.indexOf('if (config.printUrl && process.env.DSH_LAN_ACCESS === "1") {');
@@ -253,6 +262,43 @@ if (!/host: !!js "process\.env\.DSH_LAN_ACCESS === '1'/.test(patchedYml)
   } else {
     fail++;
     console.log('FAIL  关闭态的 401 分支被破坏');
+  }
+}
+
+// —— 浏览器端设置可用性：isLoopbackHostname 必须放行私有网段 ——
+// 上游用它决定设置 persistence（"host" 才可读写），只有环回算数 → 局域网设备
+// 设置页显示 "settings are unavailable in this browser"（真机反馈）。
+{
+  const m = patchedClient.match(/function isLoopbackHostname\(hostname\) \{[\s\S]*?\n\t\t\}/);
+  if (!m) {
+    fail++;
+    console.log('FAIL  补丁产物里找不到 isLoopbackHostname');
+  } else {
+    // 直接执行补丁产物里的真实函数
+    const fn = new Function(m[0] + '\nreturn isLoopbackHostname;')();
+    const cases = [
+      ['127.0.0.1', true, '环回仍放行'],
+      ['localhost', true, 'localhost 仍放行'],
+      ['[::1]', true, 'IPv6 环回仍放行'],
+      ['192.168.0.107', true, '局域网地址放行（否则设置无法读写）'],
+      ['10.1.2.3', true, '10/8 放行'],
+      ['172.19.0.1', true, '172.16-31 放行'],
+      ['8.8.8.8', false, '公网地址必须拒绝'],
+      ['evil.example.com', false, '域名必须拒绝'],
+      ['192.169.0.1', false, '192.169 不在私有段'],
+      ['172.32.0.1', false, '172.32 不在私有段'],
+      ['11.0.0.1', false, '11/8 不在私有段'],
+      ['127.0.0.1.evil.com', false, '伪造前缀必须拒绝'],
+    ];
+    for (const [host, expect, label] of cases) {
+      const got = fn(host);
+      if (got !== expect) {
+        fail++;
+        console.log(`FAIL  isLoopbackHostname("${host}") = ${got}，期望 ${expect}（${label}）`);
+      }
+    }
+    if (fail === 0) console.log('PASS  isLoopbackHostname 放行私有网段且拒绝公网/域名（12 例）');
+    else console.log('      （isLoopbackHostname 用例存在失败）');
   }
 }
 

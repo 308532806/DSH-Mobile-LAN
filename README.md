@@ -3,7 +3,7 @@
 **在手机上跑 DeepSeek Harness，同一 Wi-Fi 下的任何设备用浏览器直接打开使用。**
 
 [![CI](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml/badge.svg)](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml)
-![Release](https://img.shields.io/badge/release-v1.3.2--lan-blue)
+![Release](https://img.shields.io/badge/release-v1.3.3--lan-blue)
 ![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
@@ -120,7 +120,39 @@ IP 会变，如果只把新 IP 显示给用户，设备打开会**页面能加�
 
 不设该环境变量时行为与上游逐字一致（401 / 303 都不变）。
 
-### 6. Root 检测修正
+### 6. 局域网设备也能读写设置（模型供应商、思考强度）
+
+上游在浏览器端按 `location.hostname` 判定 `isLoopback`，并据此决定设置的持久化方式：
+
+```js
+const persistence = ctx.remote.$host.isLoopback ? "host" : "memory";
+```
+
+**非环回页面会拿到 `"memory"` —— 设置连读都不读**（镜像的 `load()`/`ensure()`
+直接 `return`），于是局域网设备打开「设置 → 模型」只会看到
+`加载提供商目录失败: settings are unavailable in this browser`，
+既改不了供应商，也拿不到模型目录里的思考强度。
+
+本 fork 把它放宽为「私有网段 IPv4 字面量同样算 host-local」：
+
+- 只有引擎自己监听该地址时，浏览器才可能从它加载页面（局域网开关关闭时不会）；
+- 真正挡住跨站攻击的是**服务端**的 Host/Origin 栅栏（`Origin.host` 必须等于 `Host`），
+  那层原样保留 —— 别的局域网主机上托管的页面依然打不到这个引擎。
+
+真机端到端验证：用 `http://192.168.0.107:3101/` 打开测试引擎，
+模型页正常列出供应商；在通用设置里切换「外观 → 深色」后，
+`profiles/web/cordis.patch.yml` 确实写入了：
+
+```yaml
+- id: ui-theme
+  name: "@deepseek-ai/dsh-client-ui-theme"
+  config:
+    preference: dark
+```
+
+即局域网来源**既能读也能写**设置。
+
+### 7. Root 检测修正
 
 原项目的 root 检测只 stat 一组写死的 su 路径。真机实测（OPPO / Android 12 / Magisk alpha）
 上这些路径**全都不存在**：su 由 magic mount 挂到 `/product/bin/su` 与 `/debug_ramdisk/su`
@@ -149,7 +181,7 @@ IP 会变，如果只把新 IP 显示给用户，设备打开会**页面能加�
 
 ```bash
 # 触发方式：推送 tag
-git tag v1.3.2-lan && git push origin v1.3.2-lan
+git tag v1.3.3-lan && git push origin v1.3.3-lan
 ```
 
 CI 流水线（`.github/workflows/android-build.yml`）会：
@@ -176,6 +208,13 @@ CI 流水线（`.github/workflows/android-build.yml`）会：
   （`/api` 返回 404 而非 401，说明认证层已放行），不设该变量时恢复 **401 / 带 token 303**
 - `cordis.patch.yml` 的 `!!js` 表达式用引擎同款解析器（js-yaml + 同款 Tag 定义）
   与同款求值语义（`with (ctx) { eval(expr) }`）验证：开 → `0.0.0.0`，关 → `127.0.0.1`
+- **设置读写端到端验证**：起一份打好补丁的引擎，用 `http://192.168.0.107:3101/`
+  （私有 IP 来源，等价于局域网设备）打开：模型页正常列出供应商目录；
+  切换「外观 → 深色」后 `profiles/web/cordis.patch.yml` 里确实出现
+  `- id: ui-theme … preference: dark` —— 读、写都通了
+- `isLoopbackHostname` 的放宽逻辑用补丁产物里的真实函数跑了 12 个用例
+  （放行 127/10/192.168/172.16-31，拒绝 8.8.8.8、域名、192.169/172.32/11、
+  `127.0.0.1.evil.com` 这类伪造前缀）
 - App 侧全部正则对着真实日志行跑通（含 token 提取、上游 `(LAN: …)` 段落、关闭态不误报）
 - 全部 Kotlin 源文件编译通过，新增文件零警告
 - 资源一致性：双语字符串键集对齐、`R.id`/`R.string` 引用全部存在、XML 良构

@@ -147,7 +147,16 @@ jobs:
             || { echo "::error::Host/Origin 栅栏被误删"; exit 1; }
           node --check /tmp/wc.js \
             || { echo "::error::注入后的 dsh-client-connection/lib/index.js 语法错误"; exit 1; }
-          echo "局域网补丁校验通过（host 受控 + 关闭回落回环 + lan url 日志 + 免 token 双闸门 + JS 语法）"
+          # 浏览器端：局域网地址必须能读写设置（上游按 isLoopback 降级为内存模式）
+          unzip -p app/src/main/assets/runtime.zip \
+            'lib/node_modules/@deepseek-ai/dsh-client-connection/lib/client.js' > /tmp/wcl.js
+          grep -q 'a === 192 && b === 168' /tmp/wcl.js \
+            || { echo "::error::客户端 isLoopbackHostname 未放行私有网段 —— 局域网设备改不了模型供应商"; exit 1; }
+          grep -q 'if (a === 127) return true;' /tmp/wcl.js \
+            || { echo "::error::客户端环回判定被破坏"; exit 1; }
+          node --check /tmp/wcl.js \
+            || { echo "::error::注入后的 dsh-client-connection/lib/client.js 语法错误"; exit 1; }
+          echo "局域网补丁校验通过（host 受控 + 关闭回落回环 + lan url 日志 + 免 token 双闸门 + 设置可写 + JS 语法）"
 
       - name: 回填 MANIFEST 版本与校验值
         run: |

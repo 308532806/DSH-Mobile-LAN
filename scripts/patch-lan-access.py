@@ -63,6 +63,37 @@ CONN_REJECT_ANCHOR = (
     '\t\tif (!isTrustedApiRequest(request, this.trustedHosts)) return 403;\n'
 )
 
+# --- 2b) 浏览器端：让局域网地址也能读写设置 ---------------------------------
+# 上游在客户端按 location.hostname 判定 isLoopback，并据此决定设置的持久化方式：
+#     const persistence = ctx.remote.$host.isLoopback ? "host" : "memory";
+# 非环回页面拿到 "memory" —— 设置**连读都不读**（mirror 的 load/ensure 直接 return），
+# 于是模型供应商页显示 "加载提供商目录失败: settings are unavailable in this browser"，
+# 也就无法修改供应商、拿不到模型目录里的思考强度。
+#
+# 对本项目来说这是致命的：局域网设备访问的全部意义就是用网页端干活，却连模型都配不了。
+# 所以把「私有网段 IPv4 字面量」也算作 host-local：
+#   · 只有引擎自己监听该地址时，浏览器才可能从它加载页面（局域网开关关闭时不会）；
+#   · 真正挡住跨站攻击的是服务端的 Host/Origin 栅栏（Origin.host 必须等于 Host），
+#     那层原样保留 —— 别的局域网主机上托管的页面依然打不到这个引擎。
+# 注意这是**浏览器端**判定，改的是 dist 里的客户端包，与 DSH_LAN_ACCESS 无关。
+CLIENT_REL = ('lib', 'node_modules', '@deepseek-ai', 'dsh-client-connection', 'lib', 'client.js')
+CLIENT_OLD = '''\t\tfunction isLoopbackHostname(hostname) {
+\t\t\tif (hostname === "localhost" || hostname === "[::1]") return true;
+\t\t\tconst parts = hostname.split(".");
+\t\t\treturn parts.length === 4 && parts[0] === "127" && parts.every((part) => /^\\d{1,3}$/.test(part) && Number(part) <= 255);
+\t\t}'''
+CLIENT_NEW = '''\t\tfunction isLoopbackHostname(hostname) {
+\t\t\tif (hostname === "localhost" || hostname === "[::1]") return true;
+\t\t\tconst parts = hostname.split(".");
+\t\t\tif (!(parts.length === 4 && parts.every((part) => /^\\d{1,3}$/.test(part) && Number(part) <= 255))) return false;
+\t\t\tconst [a, b] = [Number(parts[0]), Number(parts[1])];
+\t\t\tif (a === 127) return true;
+\t\t\t/* ''' + MARK + ''' 局域网访问：私有网段字面量同样视为 host-local，
+\t\t\t   否则局域网设备拿不到可写的设置（供应商/模型都改不了）。
+\t\t\t   跨站请求仍由服务端 Host/Origin 栅栏拦截。 */
+\t\t\treturn a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+\t\t}'''
+
 # --- 3) 就绪日志补打局域网地址（仅在开关打开时） -------------------------------
 APP_REL = ('lib', 'node_modules', '@deepseek-ai', 'dsh-web-app', 'lib', 'index.js')
 APP_OLD = ('\t\t\tif (config.printUrl) console.log(`dsh web: ${authenticatedUrl}'
@@ -185,6 +216,23 @@ def patch_no_auth(root, changed):
     print(f'{MARK} no-auth guards injected ({p})')
 
 
+def patch_client_settings(root, changed):
+    """让局域网地址打开时也能读写设置（上游按 isLoopback 把非环回降级为内存模式）。"""
+    p = os.path.join(root, *CLIENT_REL)
+    if not os.path.isfile(p):
+        sys.exit(f'{MARK} fatal: {os.path.join(*CLIENT_REL)} not found')
+    s = read(p)
+    if '[dsh-android-lan]' in s and 'a === 192 && b === 168' in s:
+        print(f'{MARK} client settings gate already relaxed ({p})')
+        return
+    if CLIENT_OLD not in s:
+        sys.exit(f'{MARK} fatal: client isLoopbackHostname anchor not found in {p}; '
+                 f'upstream changed the browser-side loopback detection')
+    write(p, s.replace(CLIENT_OLD, CLIENT_NEW, 1))
+    changed.append(p)
+    print(f'{MARK} client settings gate relaxed for private LAN literals ({p})')
+
+
 def main():
     raw = os.environ.get('DSH_PATCH_TARGET', '')
     if not raw:
@@ -194,6 +242,7 @@ def main():
     patch_yml(root, changed)
     patch_log_line(root, changed)
     patch_no_auth(root, changed)
+    patch_client_settings(root, changed)
     print(f'{MARK} done: {len(changed)} file(s) rewritten')
 
 
