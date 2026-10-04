@@ -12,6 +12,7 @@
     <string name="status_backoff">Process exited unexpectedly, restarting in %1$d s (attempt %2$d)</string>
     <string name="status_failed">Start failed: %1$s</string>
     <string name="btn_restart">Restart</string>
+    <string name="btn_lan">LAN</string>
     <string name="btn_start_engine">Start engine</string>
     <string name="btn_hide">Hide</string>
     <string name="btn_back">← Home</string>
@@ -193,4 +194,21 @@ They will be re-downloaded and reinstalled (with dependency closures). If a "per
     <string name="setting_notif_sub">Task-completion push (Android 13+)</string>
     <string name="notif_granted">Granted</string>
     <string name="notif_denied">Not granted · tap to enable</string>
+
+    <!-- LAN access mode -->
+    <string name="setting_lan">LAN access</string>
+    <string name="setting_lan_sub">Let other devices on the same Wi-Fi open this agent in a browser</string>
+    <string name="lan_on">Enabled</string>
+    <string name="lan_off">Disabled</string>
+    <string name="lan_no_ip">Enabled · no Wi-Fi connection</string>
+    <string name="lan_dialog_title">Enable LAN access?</string>
+    <string name="lan_dialog_msg">The engine will switch from listening on this phone only to listening on every network interface. Any device on the same LAN can then open the address below in a browser and use this agent — no need to touch this phone.\n\nPlease note:\n· Anyone who has the address can drive it — it reads/writes files, runs commands, and spends your model API budget\n· Only enable this on a network you trust (home Wi-Fi, your own hotspot)\n· Never enable it on public, corporate, or guest Wi-Fi\n\nYou can turn it off here at any time; that immediately goes back to local-only.\n\nCurrent address:\n%1$s</string>
+    <string name="lan_dialog_enable">Enable</string>
+    <string name="lan_dialog_disable">Disable</string>
+    <string name="lan_restart_hint">LAN access %1$s — restarting the engine…</string>
+    <string name="lan_share_title">LAN access address</string>
+    <string name="lan_share_msg">Open this in a browser on any device on the same Wi-Fi:\n\n%1$s\n\nThis URL already carries the token, so it goes straight in — no login step. Keep the token to yourself.</string>
+    <string name="lan_share_copy">Copy</string>
+    <string name="lan_share_close">Close</string>
+    <string name="lan_pending">Address available once the engine is ready</string>
 </resources>

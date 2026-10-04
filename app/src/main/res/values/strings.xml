@@ -12,6 +12,7 @@
     <string name="status_backoff">进程异常退出，%1$d 秒后自动重启（第 %2$d 次）</string>
     <string name="status_failed">启动失败：%1$s</string>
     <string name="btn_restart">重启</string>
+    <string name="btn_lan">局域网</string>
     <string name="btn_start_engine">启动引擎</string>
     <string name="btn_hide">隐藏</string>
     <string name="btn_back">← 主页</string>
@@ -193,4 +194,21 @@
     <string name="setting_notif_sub">任务完成推送（Android 13+）</string>
     <string name="notif_granted">已授权</string>
     <string name="notif_denied">未授权 · 点击开启</string>
+
+    <!-- 局域网访问（LAN 模式） -->
+    <string name="setting_lan">局域网访问</string>
+    <string name="setting_lan_sub">同一 Wi-Fi 下的其它设备用浏览器直接打开这个 Agent</string>
+    <string name="lan_on">已开启</string>
+    <string name="lan_off">已关闭</string>
+    <string name="lan_no_ip">已开启 · 未连上 Wi-Fi</string>
+    <string name="lan_dialog_title">开启局域网访问？</string>
+    <string name="lan_dialog_msg">开启后引擎将从「只监听本机」改为「监听所有网卡」，同一局域网内的任何设备用浏览器打开下面的地址即可使用这个 Agent，不再需要在这台手机上操作。\n\n请注意：\n· 拿到地址的人就能操作它——它能读写文件、执行命令，也会用你配置的模型 API\n· 请只在可信网络（家里的 Wi-Fi、自己的手机热点）里开启\n· 不要在公共 Wi-Fi、公司网络或访客网络里开启\n\n随时可以在这里关掉，关掉即刻恢复只监听本机。\n\n当前地址：\n%1$s</string>
+    <string name="lan_dialog_enable">开启</string>
+    <string name="lan_dialog_disable">关闭</string>
+    <string name="lan_restart_hint">局域网访问已%1$s，正在重启引擎生效…</string>
+    <string name="lan_share_title">局域网访问地址</string>
+    <string name="lan_share_msg">在同一 Wi-Fi 下的设备浏览器里打开：\n\n%1$s\n\n直接输入这个带 token 的地址即可进入，不需要额外登录。token 已在地址里，别把它发到公开的地方。</string>
+    <string name="lan_share_copy">复制</string>
+    <string name="lan_share_close">关闭</string>
+    <string name="lan_pending">引擎就绪后可查看地址</string>
 </resources>

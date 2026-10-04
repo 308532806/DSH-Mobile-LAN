@@ -101,6 +101,37 @@ jobs:
       - name: 注入 runtime.zip 到 assets
         run: mv runtime.zip app/src/main/assets/runtime.zip
 
+      # 构建期断言：局域网补丁必须真的进了 runtime.zip。
+      # 这类"补丁静默没生效"的问题在装机前查不出来（构建全绿、APK 正常、就是不能连），
+      # 所以在这里用产物级 grep 拦下。
+      - name: 校验局域网补丁已进入 runtime
+        run: |
+          unzip -p app/src/main/assets/runtime.zip \
+            'lib/node_modules/@deepseek-ai/dsh-web-app/cordis.patch.yml' > /tmp/ws.yml
+          # webserver 的 host 必须变成受 DSH_LAN_ACCESS 控制的三元表达式
+          if grep -q "host: !!js \"process.env.DSH_LAN_ACCESS === '1'" /tmp/ws.yml; then
+            echo "OK: webserver bind host 受 DSH_LAN_ACCESS 控制"
+          else
+            echo "::error::webserver bind host 未被局域网补丁改写 —— 局域网访问不可用"
+            grep -n "host:" /tmp/ws.yml | head -5
+            exit 1
+          fi
+          # 关闭态必须仍然回落到回环（默认安全），否则等于把开关焊死成常开
+          grep -q "ctx.webStartup.host ?? '127.0.0.1'" /tmp/ws.yml \
+            || { echo "::error::开关关闭时未回落到 127.0.0.1（默认不再是仅本机）"; exit 1; }
+          unzip -p app/src/main/assets/runtime.zip \
+            'lib/node_modules/@deepseek-ai/dsh-web-app/lib/index.js' > /tmp/wa.js
+          # 局域网地址日志行必须存在，且必须同样受开关控制
+          grep -q "dsh web: lan url:" /tmp/wa.js \
+            || { echo "::error::局域网地址日志行缺失"; exit 1; }
+          grep -q 'process.env.DSH_LAN_ACCESS === "1"' /tmp/wa.js \
+            || { echo "::error::局域网地址日志行未受开关控制"; exit 1; }
+          grep -q "\[dsh-android-lan\]" /tmp/wa.js \
+            || { echo "::error::补丁标记缺失"; exit 1; }
+          node --check /tmp/wa.js \
+            || { echo "::error::注入后的 dsh-web-app/lib/index.js 语法错误"; exit 1; }
+          echo "局域网补丁校验通过（host 受控 + 关闭回落回环 + lan url 日志 + JS 语法）"
+
       - name: 回填 MANIFEST 版本与校验值
         run: |
           SHA=$(sha256sum app/src/main/assets/runtime.zip | cut -d' ' -f1)

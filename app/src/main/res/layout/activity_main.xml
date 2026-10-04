@@ -79,6 +79,20 @@
             android:visibility="gone"
             android:background="?android:attr/selectableItemBackground" />
 
+        <!-- 局域网访问地址入口：仅「局域网访问」开启时显示。
+             一键把完整访问地址（含 token）弹给用户，方便从其它设备输入。 -->
+        <TextView
+            android:id="@+id/btnLan"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:paddingHorizontal="12dp"
+            android:text="@string/btn_lan"
+            android:textColor="#FF4DD0E1"
+            android:textSize="13sp"
+            android:visibility="gone"
+            android:background="?android:attr/selectableItemBackground" />
+
         <TextView
             android:id="@+id/btnRestart"
             android:layout_width="wrap_content"

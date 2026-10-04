@@ -19,6 +19,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import app.dsh.mobile.engine.EngineSupervisor
+import app.dsh.mobile.engine.LanGateway
 import app.dsh.mobile.engine.Privilege
 import app.dsh.mobile.service.EngineService
 import kotlinx.coroutines.CoroutineScope
@@ -44,6 +45,9 @@ class MainActivity : Activity() {
 
     /** 桌面模式：桌面 UA + 固定 1280px 视口 + 手势缩放（手机浏览器"电脑模式"等价物） */
     private var desktopMode = false
+
+    /** 是否处于预览模式（WebView 停在 AI 起的本地服务页，而非引擎主界面） */
+    private var previewMode = false
     private var defaultUa: String = ""
 
     /** 横屏模式：锁横屏模拟电脑屏幕比例；关闭交还系统 */
@@ -98,6 +102,15 @@ class MainActivity : Activity() {
         // 预览模式返回：一键从 AI 起的服务页回引擎主界面
         findViewById<TextView>(R.id.btnBack).setOnClickListener {
             loadLocalUrl((application as DshApp).supervisor.webUrl())
+        }
+        // 局域网地址：一键弹出完整访问地址（含 token），方便从其它设备输入
+        findViewById<TextView>(R.id.btnLan).setOnClickListener {
+            val url = (application as DshApp).supervisor.lanUrl()
+            if (url == null) {
+                Toast.makeText(this, getString(R.string.lan_pending), Toast.LENGTH_SHORT).show()
+            } else {
+                copyLanUrl(url)
+            }
         }
         // 工具栏收起/唤回：点横栏文字空白区收起（网页全屏）
         statusBar.setOnClickListener { toggleToolbar() }
@@ -155,8 +168,9 @@ class MainActivity : Activity() {
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val uri = request?.url ?: return false
-                // 仅允许回环导航；外部链接交给系统浏览器
-                if (uri.host == "127.0.0.1" || uri.host == "localhost") return false
+                // 本机回环、以及「局域网访问」模式下同网段的引擎地址都在 WebView 内打开；
+                // 其余外部链接交给系统浏览器。
+                if (isEngineHost(uri)) return false
                 runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
                 return true
             }
@@ -185,17 +199,57 @@ class MainActivity : Activity() {
     }
 
     /**
-     * 预览 chrome：WebView 导航到非引擎端口的回环页面（用户点击 AI 在对话里给的
-     * http://127.0.0.1:PORT 链接）时，状态栏切预览模式并亮出返回按钮；
-     * 回到引擎主界面自动恢复。AI 无需任何特殊协议，输出普通链接即可。
+     * 预览 chrome：WebView 导航到「不是引擎主界面」的本机页面（用户点击 AI 在对话里给的
+     * http://127.0.0.1:PORT 链接）时，状态栏切预览模式并亮出返回按钮；回到引擎主界面
+     * 自动恢复。AI 无需任何特殊协议，输出普通链接即可。
+     *
+     * 局域网模式下切 Wi-Fi/热点会让 IP 变化，所以这里用 isEngineHost 判断而不是比字符串。
      */
     private fun updatePreviewChrome(url: String?) {
         val uri = url?.let { Uri.parse(it) } ?: return
-        val loopback = uri.host == "127.0.0.1" || uri.host == "localhost"
         val enginePort = (application as DshApp).supervisor.healthyPort
-        val preview = loopback && uri.port != enginePort
+        val preview = isEngineHost(uri) && uri.port != enginePort
+        previewMode = preview
         findViewById<View>(R.id.btnBack).visibility = if (preview) View.VISIBLE else View.GONE
+        syncLanButton()
         if (preview) statusBar.text = getString(R.string.status_preview, uri.port)
+    }
+
+    /**
+     * 工具栏「局域网」按钮的显隐：预览模式下让位给「返回」，其余时候
+     * 只在开关打开且地址可用时出现。
+     *
+     * 单独抽出来是因为 render()（引擎状态流）与 updatePreviewChrome()（导航）
+     * 两条路都会改这个按钮，各写各的会互相打架。
+     */
+    private fun syncLanButton() {
+        val ready = LanGateway.isEnabled(this) && (application as DshApp).supervisor.lanUrl() != null
+        findViewById<View>(R.id.btnLan).visibility =
+            if (ready && !previewMode) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * 是否为本机（或本机局域网地址）上的引擎/服务页面。
+     *
+     * 回环永远算；局域网侧只在「局域网访问」开启时，把当前网卡地址算进去 ——
+     * 不写死网段，避免把公司内网/公共 Wi-Fi 上的任意站点都塞进 WebView。
+     */
+    private fun isEngineHost(uri: Uri): Boolean {
+        val host = uri.host ?: return false
+        if (host == "127.0.0.1" || host == "localhost") return true
+        if (!LanGateway.isEnabled(this)) return false
+        return host == LanGateway.localIpv4()
+    }
+
+    /**
+     * 局域网访问地址入口：不弹对话框，直接进剪贴板 + Toast 提示完整地址 ——
+     * 用户点这个按钮的意图就是「把这串地址拿去别的设备输入」，
+     * 多一层确认框只是多一次点击。地址本身在 Toast 里显示，够看一眼。
+     */
+    private fun copyLanUrl(url: String) {
+        val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("dsh-lan-url", url))
+        Toast.makeText(this, url, Toast.LENGTH_LONG).show()
     }
 
     /** 统一的回环页加载入口：缩放统一由 onPageFinished 的 viewport meta 接管，这里只导航。 */
@@ -339,6 +393,8 @@ class MainActivity : Activity() {
             if (state is EngineSupervisor.State.Installing || state is EngineSupervisor.State.Starting)
                 View.VISIBLE else View.GONE
         if (state !is EngineSupervisor.State.Starting) stopStartTicker()
+        // 局域网地址按钮：仅「局域网访问」开启、引擎就绪、且不在预览模式时可见
+        syncLanButton()
         statusBar.text = when (state) {
             is EngineSupervisor.State.Idle -> getString(R.string.status_idle)
             is EngineSupervisor.State.Installing -> getString(R.string.status_installing)
@@ -348,7 +404,9 @@ class MainActivity : Activity() {
                     urlLoaded = true
                     loadLocalUrl((application as DshApp).supervisor.webUrl())
                 }
-                getString(R.string.status_healthy)
+                // LAN 开启时状态栏直接亮出局域网地址 —— 那是用户最想知道的信息
+                // （"别的设备该输什么"），环回地址对用户没有行动价值。
+                state.lanUrl ?: getString(R.string.status_healthy)
             }
             is EngineSupervisor.State.SafeMode -> {
                 if (!urlLoaded) {
@@ -362,6 +420,7 @@ class MainActivity : Activity() {
             is EngineSupervisor.State.Failed -> getString(R.string.status_failed, state.reason)
             is EngineSupervisor.State.Stopped -> {
                 urlLoaded = false
+                previewMode = false
                 getString(R.string.status_idle)
             }
         }

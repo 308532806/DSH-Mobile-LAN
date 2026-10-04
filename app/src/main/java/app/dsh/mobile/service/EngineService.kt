@@ -14,6 +14,7 @@ import app.dsh.mobile.DshApp
 import app.dsh.mobile.MainActivity
 import app.dsh.mobile.R
 import app.dsh.mobile.engine.EngineSupervisor
+import app.dsh.mobile.engine.LanNetworkWatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,6 +31,9 @@ import kotlinx.coroutines.launch
 class EngineService : Service() {
 
     private var stateJob: Job? = null
+
+    /** 局域网访问的网卡变化监听（仅 LAN 模式生效，内部自行判断开关） */
+    private var lanWatcher: LanNetworkWatcher? = null
     private val stateScope by lazy { CoroutineScope(Dispatchers.Main) }
 
     override fun onCreate() {
@@ -57,6 +61,12 @@ class EngineService : Service() {
 
         app.supervisor.start(app.appScope)
 
+        // 局域网模式下监听网卡变化：IP 变了就重启引擎刷新信任名单与展示地址
+        // （引擎只在启动那一刻快照网卡，见 LanNetworkWatcher 注释）
+        if (lanWatcher == null) {
+            lanWatcher = LanNetworkWatcher(this, app.supervisor, app.appScope).also { it.start() }
+        }
+
         // 状态回写到常驻通知
         if (stateJob == null) {
             stateJob = stateScope.launch {
@@ -72,6 +82,8 @@ class EngineService : Service() {
         stateJob?.cancel()
         stateJob = null
         stateScope.cancel()
+        lanWatcher?.stop()
+        lanWatcher = null
         (application as DshApp).supervisor.stop()
         super.onDestroy()
     }
@@ -133,7 +145,9 @@ class EngineService : Service() {
 
     private fun updateNotification(state: EngineSupervisor.State) {
         val text = when (state) {
-            is EngineSupervisor.State.Healthy -> getString(R.string.status_healthy)
+            // 局域网模式下通知栏直接给访问地址 —— 用户不必点亮手机就能看到该输什么
+            is EngineSupervisor.State.Healthy ->
+                state.lanUrl ?: getString(R.string.status_healthy)
             is EngineSupervisor.State.Backoff ->
                 getString(R.string.status_backoff, state.delayMs / 1000, state.attempt)
             is EngineSupervisor.State.Failed -> state.reason

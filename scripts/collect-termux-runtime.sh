@@ -130,6 +130,10 @@ if command -v python3 >/dev/null 2>&1; then
   export DSH_PATCH_TARGET="$ROOT"
   python3 "$SCRIPTS_DIR/patch-apiproxy.py" || echo "WARN: apiproxy patch failed; openPath falls back to native opener"
   python3 "$SCRIPTS_DIR/patch-webview-polyfill.py" || echo "WARN: webview polyfill patch failed"
+  # 局域网访问（本项目核心改动）：把 webserver 绑定 host 改成 0.0.0.0，
+  # 并在就绪日志里补打一条带 token 的局域网地址。这个补丁**不允许**静默失败 ——
+  # 它失败就意味着产物根本不支持局域网访问，直接让 CI 红掉，不发布假版本。
+  python3 "$SCRIPTS_DIR/patch-lan-access.py" || exit 1
 fi
 
 # [koffi] FFI 库：仅 glibc/x64 预编译。真实消费方只有 dsh-subprocess-local 的

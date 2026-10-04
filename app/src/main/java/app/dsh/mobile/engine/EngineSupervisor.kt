@@ -35,10 +35,19 @@ class EngineSupervisor(private val ctx: Context) {
         data object Starting : State
 
         /** 正常健康；tokenUrl = 0.2.0+ WebUI 认证地址（engine.log 的 dsh web: 输出） */
-        data class Healthy(val port: Int, val tokenUrl: String? = null) : State
+        data class Healthy(
+            val port: Int,
+            val tokenUrl: String? = null,
+            /** 局域网可用地址（带 token）；LAN 模式关闭或取不到网卡时为 null */
+            val lanUrl: String? = null,
+        ) : State
 
         /** 安全模式：配置被隔离后以空配置拉起，功能受限但可用 */
-        data class SafeMode(val port: Int, val tokenUrl: String? = null) : State
+        data class SafeMode(
+            val port: Int,
+            val tokenUrl: String? = null,
+            val lanUrl: String? = null,
+        ) : State
         data class Backoff(val delayMs: Long, val attempt: Int) : State
         data class Failed(val reason: String) : State
         data object Stopped : State
@@ -80,11 +89,37 @@ class EngineSupervisor(private val ctx: Context) {
         null
     }.getOrNull()
 
+    /**
+     * 局域网设备可直接打开的完整地址（带 token）。
+     *
+     * 只有 LAN 模式开启时才有值。地址本身来自引擎就绪日志（引擎启动那一刻的
+     * 网卡快照，也正是连接层信任名单快照的那一份）；网卡换了地址时由
+     * [LanNetworkWatcher] 重启引擎来刷新，而不是在这里拼一个引擎未必认的 IP。
+     */
+    private fun extractLanUrl(): String? = runCatching {
+        if (!LanGateway.isEnabled(ctx)) return@runCatching null
+        LanGateway.extractLanTokenUrl(
+            logFile = logFile(),
+            fromOffset = logOffsetAtSpawn,
+            enginePort = EngineConfig.DEFAULT_PORT,
+        )
+    }.getOrNull()
+
     /** WebUI 应加载的地址：优先带 token 的完整 URL，裸地址仅作回退 */
     fun webUrl(): String = when (val s = _state.value) {
         is State.Healthy -> s.tokenUrl ?: "http://127.0.0.1:${s.port}/"
         is State.SafeMode -> s.tokenUrl ?: "http://127.0.0.1:${s.port}/"
         else -> "http://127.0.0.1:${EngineConfig.DEFAULT_PORT}/"
+    }
+
+    /**
+     * 局域网访问地址（给同一 Wi-Fi 下的其它设备用）。
+     * 未开启 LAN 模式 / 无可用网卡 / 引擎未就绪时返回 null。
+     */
+    fun lanUrl(): String? = when (val s = _state.value) {
+        is State.Healthy -> s.lanUrl
+        is State.SafeMode -> s.lanUrl
+        else -> null
     }
 
     private var process: EngineProcess? = null
@@ -255,13 +290,16 @@ class EngineSupervisor(private val ctx: Context) {
                     app.dsh.mobile.engine.ExtensionManager.clearPendingRestart()
                     val safe = guardian.inSafeMode()
                     val tokenUrl = extractTokenUrl()
+                    // LAN 地址：日志里的 token 行就绪后才有值，与 tokenUrl 同源同序号
+                    val lanUrl = extractLanUrl()
                     val t1 = System.currentTimeMillis()
                     val restartMs = restartStartedAt?.let { "（本次重启总耗时 ${t1 - it}ms）" } ?: ""
                     restartStartedAt = null
                     Log.i(TAG, (if (safe) "engine healthy in SAFE MODE on :${EngineConfig.DEFAULT_PORT}" else "engine healthy on :${EngineConfig.DEFAULT_PORT}") + restartMs)
+                    if (lanUrl != null) Log.i(TAG, "LAN access ready: $lanUrl")
                     _state.value =
-                        if (safe) State.SafeMode(EngineConfig.DEFAULT_PORT, tokenUrl)
-                        else State.Healthy(EngineConfig.DEFAULT_PORT, tokenUrl)
+                        if (safe) State.SafeMode(EngineConfig.DEFAULT_PORT, tokenUrl, lanUrl)
+                        else State.Healthy(EngineConfig.DEFAULT_PORT, tokenUrl, lanUrl)
                     // Shizuku 模式：引擎就绪后启动 ADB 级访问桥（shz 包装器回呼用）；其他模式自动关停
                     withContext(Dispatchers.IO) {
                         ShizukuHttpBridge.start(ctx, EngineConfig.DEFAULT_PORT)

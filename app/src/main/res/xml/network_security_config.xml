@@ -1,12 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  仅放行到本机回环地址的明文 HTTP：引擎 Web UI 监听 127.0.0.1，
-  其余域名一律强制 HTTPS，收窄攻击面。
+  明文 HTTP 的放行范围。
+
+  - 环回放行是刚需：引擎 Web UI 监听 127.0.0.1，App 内置 WebView 走这里。
+  - 局域网放行是「局域网访问」模式的刚需：开启后引擎监听 0.0.0.0，
+    局域网设备用 http://192.168.x.x:3080/ 访问，WebView 里点这类链接也要能开。
+
+  ⚠️ 这里刻意**不**用 cleartextTrafficPermitted="true" 的 base-config：
+  那会让 App 对任意域名都允许明文，等于把 TLS 降级的口子开给所有联网行为。
+  实际访问的局域网地址是运行时才知道的（随 Wi-Fi/热点变化），而 network-security-config
+  只支持静态网段前缀，所以用「常见私有网段前缀 + 环回」白名单收窄：
+  真正需要放行的地址必落在这几段里（IPv4 私有地址空间就那么几块）。
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">127.0.0.1</domain>
         <domain includeSubdomains="false">localhost</domain>
+        <!-- RFC1918 私有网段：家用/办公路由器、手机热点默认都在这几段 -->
+        <domain includeSubdomains="true">192.168.0.0</domain>
+        <domain includeSubdomains="true">10.0.0.0</domain>
+        <domain includeSubdomains="true">172.16.0.0</domain>
     </domain-config>
 </network-security-config>

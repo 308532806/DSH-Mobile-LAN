@@ -14,7 +14,9 @@ import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import app.dsh.mobile.engine.EngineConfig
 import app.dsh.mobile.engine.ExtensionManager
+import app.dsh.mobile.engine.LanGateway
 import app.dsh.mobile.engine.PrivMode
 import app.dsh.mobile.engine.Privilege
 import app.dsh.mobile.engine.TtsManager
@@ -125,6 +127,13 @@ class SettingsActivity : Activity() {
         }
         refreshNotifRow()
 
+        // —— 权限中心：局域网访问（LAN 模式） ——
+        // 关闭状态点击 = 询问是否开启；开启状态点击 = 查看/复制访问地址
+        findViewById<LinearLayout>(R.id.rowLan).setOnClickListener {
+            if (LanGateway.isEnabled(this)) showLanAddress() else confirmEnableLan()
+        }
+        refreshLanRow()
+
         // —— 扩展中心 ——
         findViewById<LinearLayout>(R.id.rowExt).setOnClickListener {
             startActivity(Intent(this, ExtensionStoreActivity::class.java))
@@ -224,6 +233,7 @@ class SettingsActivity : Activity() {
         refreshStorageRow()
         refreshTtsRow()
         refreshNotifRow()
+        refreshLanRow()
         refreshExt()
         // 缩放副标题文案无需变；图标着色按打开时状态由静态 XML 决定
     }
@@ -254,6 +264,107 @@ class SettingsActivity : Activity() {
         val v = findViewById<TextView>(R.id.valTts)
         v.text = if (n == 0) getString(R.string.tts_missing) else getString(R.string.tts_engines, n)
         v.setTextColor(if (n > 0) 0xFF6EE7B7.toInt() else 0xFF8A94A3.toInt())
+    }
+
+    // ================= 局域网访问（LAN 模式） =================
+
+    /**
+     * 开启局域网访问前的风险确认。
+     *
+     * 开启后引擎监听所有网卡，同一网络里拿到地址的人就能操作这个 Agent
+     * （读写文件、执行命令、消耗 API 额度）—— 上游 CLI 硬拒 `--host 0.0.0.0`
+     * 正是这个原因。这里把上游的告警语义搬到 UI 上，而不是悄悄放开。
+     */
+    private fun confirmEnableLan() {
+        if (LanGateway.localIpv4() == null) {
+            Toast.makeText(this, getString(R.string.lan_no_ip), Toast.LENGTH_LONG).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.lan_dialog_title))
+            .setMessage(getString(R.string.lan_dialog_msg, previewLanAddress()))
+            .setNegativeButton(getString(android.R.string.cancel), null)
+            .setPositiveButton(getString(R.string.lan_dialog_enable)) { _, _ -> applyLanChange(true) }
+            .showStyled()
+    }
+
+    /** 落地开关并重启引擎让监听面生效；重启是异步的，这里只负责告知。 */
+    private fun applyLanChange(on: Boolean) {
+        LanGateway.setEnabled(this, on)
+        (application as DshApp).supervisor.restart()
+        refreshLanRow()
+        Toast.makeText(
+            this,
+            getString(
+                R.string.lan_restart_hint,
+                getString(if (on) R.string.lan_on else R.string.lan_off),
+            ),
+            Toast.LENGTH_LONG,
+        ).show()
+    }
+
+    /** 确认框里预先展示将要生效的地址（引擎还没重启，所以是预测值） */
+    private fun previewLanAddress(): String {
+        val ip = LanGateway.localIpv4() ?: return getString(R.string.lan_pending)
+        return "http://$ip:${EngineConfig.DEFAULT_PORT}/"
+    }
+
+    /**
+     * 局域网状态行。
+     * - 关闭：灰字「已关闭」，副标题提示用途
+     * - 开启且引擎就绪：绿字「已开启」，副标题直接给可点的完整地址（含 token），
+     *   点整行可再次查看/复制地址
+     * - 开启但引擎未就绪 / 没网卡：黄字，副标题说明原因
+     */
+    private fun refreshLanRow() {
+        val on = LanGateway.isEnabled(this)
+        val v = findViewById<TextView>(R.id.valLan)
+        val sub = findViewById<TextView>(R.id.subLan)
+        val live = (application as DshApp).supervisor.lanUrl()
+
+        when {
+            !on -> {
+                v.text = getString(R.string.lan_off)
+                v.setTextColor(0xFF8A94A3.toInt())
+                sub.text = getString(R.string.setting_lan_sub)
+            }
+            live != null -> {
+                v.text = getString(R.string.lan_on)
+                v.setTextColor(0xFF6EE7B7.toInt())
+                sub.text = live
+            }
+            else -> {
+                v.text = getString(R.string.lan_no_ip)
+                v.setTextColor(0xFFFFB74D.toInt())
+                sub.text = getString(R.string.lan_pending)
+            }
+        }
+    }
+
+    /**
+     * 已开启时点击状态行 → 弹出完整地址，并提供复制与关闭两个动作。
+     * 「关闭」放在这里（而不是只藏在确认框里）是因为：开启后这一行就是用户
+     * 唯一会去看的地方，退出通道必须和入口一样好找。
+     */
+    private fun showLanAddress() {
+        val url = (application as DshApp).supervisor.lanUrl()
+        if (url == null) {
+            Toast.makeText(this, getString(R.string.lan_pending), Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.lan_share_title))
+            .setMessage(getString(R.string.lan_share_msg, url))
+            .setNeutralButton(getString(R.string.lan_dialog_disable)) { _, _ -> applyLanChange(false) }
+            .setNegativeButton(getString(R.string.lan_share_close), null)
+            .setPositiveButton(getString(R.string.lan_share_copy)) { _, _ -> copyLanAddress(url) }
+            .showStyled()
+    }
+
+    private fun copyLanAddress(url: String) {
+        val cm = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("dsh-lan-url", url))
+        Toast.makeText(this, getString(R.string.lan_share_copy) + " ✓", Toast.LENGTH_SHORT).show()
     }
 
     /** 权限中心：通知权限（Android 13+ 运行时授权；低版本默认持有） */
