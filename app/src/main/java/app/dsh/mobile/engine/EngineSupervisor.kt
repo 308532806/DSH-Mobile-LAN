@@ -98,11 +98,15 @@ class EngineSupervisor(private val ctx: Context) {
      */
     private fun extractLanUrl(): String? = runCatching {
         if (!LanGateway.isEnabled(ctx)) return@runCatching null
-        LanGateway.extractLanTokenUrl(
+        val raw = LanGateway.extractLanTokenUrl(
             logFile = logFile(),
             fromOffset = logOffsetAtSpawn,
             enginePort = EngineConfig.DEFAULT_PORT,
-        )
+        ) ?: return@runCatching null
+        // 免 token 模式下展示不带 token 的干净地址（用户要的就是能在别的设备手输的
+        // http://ip:3080/）。主机段仍取自引擎启动日志 —— LanNetworkWatcher 靠它
+        // 与当前网卡地址比对来判断是否需要重启，换成实时探测会让比较恒等、吞掉重启。
+        if (LanGateway.isNoAuthEnabled(ctx)) LanGateway.stripToken(raw) else raw
     }.getOrNull()
 
     /** WebUI 应加载的地址：优先带 token 的完整 URL，裸地址仅作回退 */

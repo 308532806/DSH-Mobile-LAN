@@ -47,7 +47,23 @@ YML_NEW = (
     "? '0.0.0.0' : (ctx.webStartup.host ?? '127.0.0.1')\""
 )
 
-# --- 2) 就绪日志补打局域网地址（仅在开关打开时） -------------------------------
+# --- 2) 免 token 访问（可选，默认关）-----------------------------------------
+# 上游的浏览器认证是两段：
+#   a) authorizeIndex() —— 首屏 HTML：?token= 换持久 cookie，否则 401
+#   b) requestRejection() —— /api：先过 Host/Origin 栅栏，再查 cookie，否则 401
+# 用户希望同一网络内直接 http://ip:3080/ 打开，所以 gated 掉这两处的拒绝分支。
+#
+# 刻意**保留** Host/Origin 栅栏（isTrustedApiRequest）：它挡的是 DNS rebinding
+# ——恶意网页把域名解析到本机地址来打这个 API。局域网设备正常访问时 Host 本来
+# 就在信任名单里，保留它对使用者零成本，去掉它才是真的把门拆了。
+CONN_REL = ('lib', 'node_modules', '@deepseek-ai', 'dsh-client-connection', 'lib', 'index.js')
+CONN_INDEX_ANCHOR = '\tauthorizeIndex(req, res) {\n'
+CONN_REJECT_ANCHOR = (
+    '\trequestRejection(request) {\n'
+    '\t\tif (!isTrustedApiRequest(request, this.trustedHosts)) return 403;\n'
+)
+
+# --- 3) 就绪日志补打局域网地址（仅在开关打开时） -------------------------------
 APP_REL = ('lib', 'node_modules', '@deepseek-ai', 'dsh-web-app', 'lib', 'index.js')
 APP_OLD = ('\t\t\tif (config.printUrl) console.log(`dsh web: ${authenticatedUrl}'
            '${lanUrl === void 0 ? "" : ` (LAN: ${lanUrl})`}`);')
@@ -134,6 +150,41 @@ def patch_log_line(root, changed):
     print(f'{MARK} lan url log line injected ({p})')
 
 
+def patch_no_auth(root, changed):
+    """免 token 访问：gated 掉首屏与 /api 的 cookie 校验（Host/Origin 栅栏保留）。"""
+    p = os.path.join(root, *CONN_REL)
+    if not os.path.isfile(p):
+        sys.exit(f'{MARK} fatal: {os.path.join(*CONN_REL)} not found')
+    s = read(p)
+    if 'DSH_LAN_NO_AUTH' in s:
+        print(f'{MARK} no-auth guards already present ({p})')
+        return
+    if CONN_INDEX_ANCHOR not in s or CONN_REJECT_ANCHOR not in s:
+        sys.exit(f'{MARK} fatal: client-connection auth anchors not found in {p}; '
+                 f'upstream changed the browser auth shape')
+
+    guard_index = (
+        CONN_INDEX_ANCHOR
+        + '\t\t/* ' + MARK + ' 免 token 访问（默认关）：打开后同一网络内直接用\n'
+        + '\t\t   http://<ip>:<port>/ 打开即可，不需要 URL 里带 ?token=。\n'
+        + '\t\t   注意这里只绕过"浏览器会话认证"，/api 的 Host/Origin 栅栏照旧生效。 */\n'
+        + '\t\tif (process.env.DSH_LAN_NO_AUTH === "1") return true;\n'
+    )
+    s = s.replace(CONN_INDEX_ANCHOR, guard_index, 1)
+
+    guard_reject = (
+        '\trequestRejection(request) {\n'
+        '\t\tif (!isTrustedApiRequest(request, this.trustedHosts)) return 403;\n'
+        '\t\t/* ' + MARK + ' 免 token 访问：跳过 cookie 校验（栅栏已在上一行过掉） */\n'
+        '\t\tif (process.env.DSH_LAN_NO_AUTH === "1") return void 0;\n'
+    )
+    s = s.replace(CONN_REJECT_ANCHOR, guard_reject, 1)
+
+    write(p, s)
+    changed.append(p)
+    print(f'{MARK} no-auth guards injected ({p})')
+
+
 def main():
     raw = os.environ.get('DSH_PATCH_TARGET', '')
     if not raw:
@@ -142,6 +193,7 @@ def main():
     changed = []
     patch_yml(root, changed)
     patch_log_line(root, changed)
+    patch_no_auth(root, changed)
     print(f'{MARK} done: {len(changed)} file(s) rewritten')
 
 

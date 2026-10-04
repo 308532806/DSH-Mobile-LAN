@@ -136,7 +136,18 @@ jobs:
             || { echo "::error::补丁标记缺失"; exit 1; }
           node --check /tmp/wa.js \
             || { echo "::error::注入后的 dsh-web-app/lib/index.js 语法错误"; exit 1; }
-          echo "局域网补丁校验通过（host 受控 + 关闭回落回环 + lan url 日志 + JS 语法）"
+          # 免 token 补丁：两处认证闸门必须都已 gated（默认关，不设环境变量即上游行为）
+          unzip -p app/src/main/assets/runtime.zip \
+            'lib/node_modules/@deepseek-ai/dsh-client-connection/lib/index.js' > /tmp/wc.js
+          grep -q 'DSH_LAN_NO_AUTH === "1") return true;' /tmp/wc.js \
+            || { echo "::error::首屏认证闸门未被免 token 补丁改写"; exit 1; }
+          grep -q 'DSH_LAN_NO_AUTH === "1") return void 0;' /tmp/wc.js \
+            || { echo "::error::/api 认证闸门未被免 token 补丁改写"; exit 1; }
+          grep -q 'isTrustedApiRequest(request, this.trustedHosts)) return 403' /tmp/wc.js \
+            || { echo "::error::Host/Origin 栅栏被误删"; exit 1; }
+          node --check /tmp/wc.js \
+            || { echo "::error::注入后的 dsh-client-connection/lib/index.js 语法错误"; exit 1; }
+          echo "局域网补丁校验通过（host 受控 + 关闭回落回环 + lan url 日志 + 免 token 双闸门 + JS 语法）"
 
       - name: 回填 MANIFEST 版本与校验值
         run: |

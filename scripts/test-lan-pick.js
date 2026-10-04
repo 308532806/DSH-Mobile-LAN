@@ -33,6 +33,16 @@ const YML_ANCHOR = "        host: !!js ctx.webStartup.host ?? '127.0.0.1'\n";
 const JS_ANCHOR =
   '\t\t\tif (config.printUrl) console.log(`dsh web: ${authenticatedUrl}' +
   '${lanUrl === void 0 ? "" : ` (LAN: ${lanUrl})`}`);\n';
+// client-connection 的两处认证闸门（免 token 补丁的锚点）
+const CONN_ANCHOR =
+  '\tauthorizeIndex(req, res) {\n' +
+  '\t\tconst url = new URL(req.url ?? "/", "http://dsh.invalid");\n' +
+  '\t\treturn false;\n' +
+  '\t}\n' +
+  '\trequestRejection(request) {\n' +
+  '\t\tif (!isTrustedApiRequest(request, this.trustedHosts)) return 403;\n' +
+  '\t\treturn this.browserAuth.isAuthenticated(request) ? void 0 : 401;\n' +
+  '\t}\n';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lan-pick-'));
 const ymlDir = path.join(tmp, 'lib/node_modules/@deepseek-ai/dsh-web-app');
@@ -40,11 +50,15 @@ fs.mkdirSync(ymlDir, { recursive: true });
 fs.writeFileSync(path.join(ymlDir, 'cordis.patch.yml'), YML_ANCHOR + '        port: 3080\n');
 fs.mkdirSync(path.join(ymlDir, 'lib'), { recursive: true });
 fs.writeFileSync(path.join(ymlDir, 'lib/index.js'), 'function x() {\n' + JS_ANCHOR + '}\n');
+const connDir = path.join(tmp, 'lib/node_modules/@deepseek-ai/dsh-client-connection/lib');
+fs.mkdirSync(connDir, { recursive: true });
+fs.writeFileSync(path.join(connDir, 'index.js'), CONN_ANCHOR);
 
 execFileSync('python3', [PATCH], { env: { ...process.env, DSH_PATCH_TARGET: tmp } });
 
 const patched = fs.readFileSync(path.join(ymlDir, 'lib/index.js'), 'utf8');
 const patchedYml = fs.readFileSync(path.join(ymlDir, 'cordis.patch.yml'), 'utf8');
+const patchedConn = fs.readFileSync(path.join(connDir, 'index.js'), 'utf8');
 
 // —— 抠出注入的代码块 ——
 const start = patched.indexOf('if (config.printUrl && process.env.DSH_LAN_ACCESS === "1") {');
@@ -202,6 +216,44 @@ if (!/host: !!js "process\.env\.DSH_LAN_ACCESS === '1'/.test(patchedYml)
   console.log('FAIL  cordis.patch.yml 的 host 表达式不符合预期');
 } else {
   console.log('PASS  cordis.patch.yml host 受开关控制且关闭态回落回环');
+}
+
+// —— 免 token 补丁：两处认证闸门必须都被 gated，且默认不生效 ——
+{
+  const hasIndexGuard = /authorizeIndex\(req, res\) \{\s*\n\s*\/\*[^*]*\*\/\s*\n\s*if \(process\.env\.DSH_LAN_NO_AUTH === "1"\) return true;/.test(patchedConn)
+    || /authorizeIndex\(req, res\) \{\n[\s\S]{0,400}?if \(process\.env\.DSH_LAN_NO_AUTH === "1"\) return true;/.test(patchedConn);
+  if (hasIndexGuard) {
+    console.log('PASS  authorizeIndex 已受 DSH_LAN_NO_AUTH 控制');
+  } else {
+    fail++;
+    console.log('FAIL  authorizeIndex 未被免 token 补丁改写');
+  }
+
+  const hasRejectGuard = /if \(!isTrustedApiRequest\(request, this\.trustedHosts\)\) return 403;\n[\s\S]{0,200}?if \(process\.env\.DSH_LAN_NO_AUTH === "1"\) return void 0;/.test(patchedConn);
+  if (hasRejectGuard) {
+    console.log('PASS  requestRejection 已受 DSH_LAN_NO_AUTH 控制（且 Host 栅栏保留在前）');
+  } else {
+    fail++;
+    console.log('FAIL  requestRejection 未被免 token 补丁改写');
+  }
+
+  // 栅栏必须仍在 cookie 校验之前 —— 免 token 不该顺手拆掉防 DNS rebinding 的那层
+  const fenceIdx = patchedConn.indexOf('if (!isTrustedApiRequest(request, this.trustedHosts)) return 403;');
+  const noAuthIdx = patchedConn.indexOf('if (process.env.DSH_LAN_NO_AUTH === "1") return void 0;');
+  if (fenceIdx >= 0 && noAuthIdx > fenceIdx) {
+    console.log('PASS  Host/Origin 栅栏保留且先于免 token 判定');
+  } else {
+    fail++;
+    console.log('FAIL  Host/Origin 栅栏顺序不对（免 token 必须发生在栅栏之后）');
+  }
+
+  // 未设置环境变量时行为必须与上游一致：返回必须仍是 401 / writeUnauthorized
+  if (/return this\.browserAuth\.isAuthenticated\(request\) \? void 0 : 401;/.test(patchedConn)) {
+    console.log('PASS  关闭时仍返回 401（上游行为未变）');
+  } else {
+    fail++;
+    console.log('FAIL  关闭态的 401 分支被破坏');
+  }
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

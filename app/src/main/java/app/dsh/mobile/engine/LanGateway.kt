@@ -28,6 +28,7 @@ object LanGateway {
     private const val TAG = "LanGateway"
     private const val PREFS = "dsh_ui"
     private const val KEY_LAN = "lan_access"
+    private const val KEY_LAN_NO_AUTH = "lan_no_auth"
 
     /** 本机 LAN 监听端口（与引擎端口一致，引擎由 App 指定） */
     private fun port(enginePort: Int): Int = enginePort
@@ -42,6 +43,26 @@ object LanGateway {
             .putBoolean(KEY_LAN, on).apply()
         Log.i(TAG, "LAN access ${if (on) "enabled" else "disabled"}")
     }
+
+    /**
+     * 是否启用「免 token 访问」：同一网络内直接用 `http://<ip>:3080/` 打开，
+     * URL 不必带 `?token=`。仅在 [isEnabled] 为真时有意义。
+     *
+     * ⚠️ 这等于把"能连上端口"与"能指挥 Agent"之间的唯一凭据拿掉 ——
+     * 同一网络里任何能访问该端口的设备都能读写文件、执行命令、消耗模型额度。
+     * 所以默认关闭，且必须在 UI 上有明确的风险告知。
+     */
+    fun isNoAuthEnabled(ctx: Context): Boolean =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_LAN_NO_AUTH, false)
+
+    fun setNoAuthEnabled(ctx: Context, on: Boolean) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_LAN_NO_AUTH, on).apply()
+        Log.i(TAG, "LAN no-auth ${if (on) "enabled" else "disabled"}")
+    }
+
+    /** 去掉 URL 里的 `?token=…`，得到可以直接口头/手输的干净地址 */
+    fun stripToken(url: String): String = url.substringBefore("?")
 
     /**
      * 本机当前的局域网 IPv4 地址；取不到返回 null。

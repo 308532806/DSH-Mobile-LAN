@@ -12,6 +12,7 @@ import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
 import android.widget.TextView
+import android.widget.Toast
 import app.dsh.mobile.engine.PrivMode
 import app.dsh.mobile.engine.Privilege
 
@@ -107,18 +108,52 @@ class OnboardingActivity : Activity() {
 
     /** Root 无 su 可用时：置灰 RadioButton 禁用 + 显示"未检测到 su"提示 */
     private fun updateRootAvailability() {
-        val rootOk = Privilege.rootAvailableMinimal()
+        val rootOk = Privilege.rootAvailable()
         val rb = findViewById<RadioButton>(R.id.privRoot)
         rb.isEnabled = rootOk
         rb.alpha = if (rootOk) 1f else 0.35f
-        findViewById<TextView>(R.id.rootHint).text = getString(
+        val hint = findViewById<TextView>(R.id.rootHint)
+        hint.text = getString(
             if (rootOk) R.string.ob_priv_root_desc else R.string.ob_priv_root_gray_hint
         )
+        // 未检测到时，提示行可点：真跑一次 su 验证。
+        // 被动检查只 stat 几个写死的路径，su 挂在别处（如 Magisk 的 /product/bin/su）
+        // 就会误判"设备没 root"，所以必须给用户一条自救通道。
+        hint.isClickable = !rootOk
+        hint.setOnClickListener { if (!rootOk) recheckRoot() }
         // 若当前选中了 Root 但 su 不可用，回落到普通
         if (!rootOk && selectedPriv == PrivMode.ROOT) {
             selectedPriv = PrivMode.NORMAL
             findViewById<RadioGroup>(R.id.privGroup).check(R.id.privNormal)
         }
+    }
+
+    /**
+     * 点提示行 → 后台真跑一次 su（会弹授权框）；成功后解除置灰并自动选上 Root。
+     * 必须离开主线程：su 可能等待用户点授权，最长等 10s。
+     */
+    private fun recheckRoot() {
+        val hint = findViewById<TextView>(R.id.rootHint)
+        hint.text = getString(R.string.setting_root_probing)
+        Thread({
+            val ok = Privilege.runSuCheckRoot()
+            runOnUiThread {
+                findViewById<TextView>(R.id.capRoot).text = getString(
+                    if (ok) R.string.ob_cap_root_present else R.string.ob_cap_root_absent
+                )
+                findViewById<TextView>(R.id.capRoot).setTextColor(
+                    if (ok) 0xFF6EE7B7.toInt() else 0xFFFFB74D.toInt()
+                )
+                updateRootAvailability()
+                if (ok) {
+                    selectedPriv = PrivMode.ROOT
+                    findViewById<RadioGroup>(R.id.privGroup).check(R.id.privRoot)
+                    Toast.makeText(this, getString(R.string.setting_root_probe_ok), Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(this, getString(R.string.setting_root_probe_fail), Toast.LENGTH_LONG).show()
+                }
+            }
+        }, "root-recheck").apply { isDaemon = true; start() }
     }
 
     override fun onDestroy() {

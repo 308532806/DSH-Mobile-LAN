@@ -34,11 +34,28 @@ object Privilege {
     private const val KEY_ONBOARDED = "onboarded"
 
     // 常见 su 路径（存在其一即视为具备 Root 能力）
+    //
+    // 【v1.3.2 真机事故修复】原列表只盯 /system/bin 等传统位置，
+    // 实测 OPPO/Android 12 + Magisk（alpha）上这些全都不存在：
+    //   su 由 magic mount 挂到 /product/bin/su 与 /debug_ramdisk/su
+    //   （都是指向 ./magisk 的符号链接），而 /system/bin/su 根本没有。
+    // 于是"手机明明有 root，软件却检测不到"——纯路径列表缺口。
+    //
+    // 追加两个真实落点：/product/bin/su（新 Magisk 常见）、
+    // /debug_ramdisk/su（Magisk 24+ 的真实二进制位置）、APatch 的 /data/adb/ap*。
+    // 同时**移除两个根本不是 su 的条目**：
+    //   · /system/bin/busybox —— 装了 busybox ≠ 有 root；更糟的是 findSu() 会把它
+    //     当 su 可执行文件交给 Root 模式启动引擎（busybox -c ... 必然失败）；
+    //   · /system/bin/su.d   —— 那是放脚本的目录，不是可执行文件。
     private val SU_PATHS = listOf(
         "/system/bin/su", "/system/xbin/su",
+        "/product/bin/su",                      // Magisk（新）实测落点
+        "/debug_ramdisk/su",                    // Magisk 24+ 真实二进制
+        "/system_ext/bin/su", "/odm/bin/su",
         "/sbin/su", "/vendor/bin/su", "/su/bin/su",
-        "/data/adb/magisk/su", "/data/adb/ksu/bin/su",
-        "/system/bin/su.d", "/system/bin/busybox",
+        "/data/adb/magisk/su",                  // 旧 Magisk（/data/adb 为 0700，应用 stat 不到，仅兜底）
+        "/data/adb/ksu/bin/su",                 // KernelSU
+        "/data/adb/ap/bin/su", "/data/adb/apd/bin/su",  // APatch
     )
 
     // 常见 Shizuku 服务名（存在授权即视为可用）
@@ -64,26 +81,6 @@ object Privilege {
         prefs(ctx).edit().putBoolean(KEY_ONBOARDED, true).apply()
     }
 
-    /**
-     * Root 探测：先 stat 常见 su 路径；未命中再实际执行 `su -c id` 验证。
-     * Magisk/KernelSU 的 mount namespace 隔离会让 App 沙箱 stat 不到 su
-     * （adb shell 能看到、app 进程看不到），所以必须真实执行一次——
-     * 这会触发 Magisk 授权弹窗，属 Root 模式的必要首次授权。
-     * 仅跑 `id`，无任何危险动作；2s 超时防挂起。
-     */
-    private fun probeRoot(): Boolean {
-        if (SU_PATHS.any { java.io.File(it).exists() }) return true
-        return runCatching {
-            val pb = ProcessBuilder("su", "-c", "id")
-                .redirectErrorStream(true)
-            val p = pb.start()
-            val out = java.util.concurrent.TimeUnit.SECONDS
-            val done = p.waitFor(2, out)
-            if (!done) { p.destroy(); return false }
-            p.inputStream.bufferedReader().readText().contains("uid=0")
-        }.getOrDefault(false)
-    }
-
     /** 浅探测 Shizuku：Manager/Server 包是否安装（不代表已授权） */
     private fun probeShizukuInstalled(ctx: Context): Boolean {
         val pm = ctx.packageManager
@@ -93,15 +90,77 @@ object Privilege {
     }
 
     fun probe(ctx: Context): PrivCapability = PrivCapability(
-        hasRoot = probeRoot(),
+        hasRoot = rootAvailable(),
         hasShizuku = probeShizukuInstalled(ctx),
     )
 
     /**
+     * 主动探测结果缓存：null = 本次进程内还没探测过。
+     * 被动路径检查可能因为路径列表不全而误判"没有 root"，主动探测是权威结论，
+     * 一旦成功就持久到进程结束，避免 UI 反复显示"未检测到"。
+     */
+    @Volatile private var activeProbeOk: Boolean? = null
+
+    /**
+     * UI 判定用（引导页置灰、设置页状态行）：被动路径检查 **或** 主动探测已成功。
+     *
+     * 只做被动检查时会有假阴性（su 挂在列表外的位置）—— 真机事故：
+     * OPPO + Magisk 的 su 在 /product/bin/su，旧列表没有它 → "明明有 root 却检测不到"。
+     */
+    fun rootAvailable(): Boolean = rootAvailableMinimal() || activeProbeOk == true
+
+    /**
      * 轻量 Root 可用性（UI 变灰用，m1.30）：仅 stat 常见 su 路径，不执行 su -c id，
-     * 避免每次读 UI 都触发 Magisk 授权弹窗。入引导时用户已知 root 意图才用 probeRoot 真实探测。
+     * 避免每次读 UI 都触发 Magisk 授权弹窗。用户显式动作时才用 [runSuCheckRoot] 真实探测。
+     *
+     * 注意这只代表"路径存在"，不代表 su 真能用（可能被策略拒绝/授权未给）。
+     * 用户看到"未检测到"但确信有 root 时，用 [runSuCheckRoot] 做一次真探测。
      */
     fun rootAvailableMinimal(): Boolean = SU_PATHS.any { java.io.File(it).exists() }
+
+    /**
+     * 真探测：逐个候选 su 执行 `-c id`，能拿到 uid=0 才算有 root。
+     *
+     * 为什么必须用**绝对路径**，而不是裸 `su`：
+     * Android 应用的 PATH 由 zygote 设定，未必包含 `/product/bin`
+     * （本机实测 su 就挂在那里），此时 `ProcessBuilder("su", ...)` 直接
+     * FileNotFoundException → 误判"设备没 root"。绝对路径不依赖 PATH。
+     *
+     * 副作用：会触发 Magisk/KernelSU 的授权弹窗，所以只在用户显式动作
+     * （引导页点提示行、设置页点状态行）时调用，绝不放进会频繁重绘的路径。
+     * 首个候选给足 [timeoutMs] 让用户从容点"允许"，后续兜底候选快速跳过。
+     */
+    fun runSuCheckRoot(timeoutMs: Long = 10_000): Boolean {
+        val existing = SU_PATHS.filter {
+            runCatching { java.io.File(it).exists() }.getOrDefault(false)
+        }
+        // 存在的候选优先（真正会执行的通常只有一个），裸 su 放最后兜底
+        val candidates = (existing + listOf("su")).distinct()
+        var first = true
+        for (cmd in candidates) {
+            val budget = if (first) timeoutMs else 1_500
+            first = false
+            val ok = runCatching {
+                val p = ProcessBuilder(cmd, "-c", "id").redirectErrorStream(true).start()
+                // 先等退出再读：`id` 的输出只有几十字节，不可能塞满管道，
+                // 反过来（先 readText 再 waitFor）会一直阻塞到进程结束，超时形同虚设。
+                val finished = p.waitFor(budget, java.util.concurrent.TimeUnit.MILLISECONDS)
+                if (!finished) {
+                    p.destroy()
+                    return@runCatching false
+                }
+                p.inputStream.bufferedReader().readText().contains("uid=0")
+            }.getOrDefault(false)
+            if (ok) {
+                Log.i(TAG, "root probe ok via $cmd")
+                activeProbeOk = true
+                return true
+            }
+        }
+        Log.i(TAG, "root probe failed; tried ${candidates.size} candidate(s)")
+        activeProbeOk = false
+        return false
+    }
 
     // ---- Shizuku 真实集成（m1.25）----
     // 官方 API（dev.rikka.shizuku:api 13.1.5）：ShizukuProvider 在 Manifest 声明后，

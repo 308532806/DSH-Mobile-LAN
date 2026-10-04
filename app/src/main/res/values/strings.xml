@@ -84,6 +84,10 @@
     <string name="setting_priv_mode_sub">决定 AI 能触及的系统能力边界，切换后自动重启引擎</string>
     <string name="setting_root_status">Root 能力</string>
     <string name="setting_root_sub">以 su 身份运行引擎，AI 可获得系统级权限（需设备已 Root）；切换后自动重启引擎</string>
+    <string name="setting_root_sub_tap">点击此行真跑一次 su 验证（会弹出 Root 授权框）</string>
+    <string name="setting_root_probing">正在验证 Root（如弹出授权框请点「允许」）…</string>
+    <string name="setting_root_probe_ok">Root 验证通过，已获得超级用户权限</string>
+    <string name="setting_root_probe_fail">Root 验证失败：su 执行未返回 uid=0。请检查 Root 管理器里是否已授权本应用，或设备实际未 Root</string>
     <string name="setting_root_status_yes">已检测到 su</string>
     <string name="setting_root_status_no">未检测到 su</string>
     <string name="setting_shizuku_status">Shizuku 状态</string>
@@ -211,4 +215,22 @@
     <string name="lan_share_copy">复制</string>
     <string name="lan_share_close">关闭</string>
     <string name="lan_pending">引擎就绪后可查看地址</string>
+    <string name="setting_lan_no_auth">免 token 访问</string>
+    <string name="setting_lan_no_auth_sub">同一网络内直接打开 http://IP:3080/，不用在地址里带那串 token</string>
+    <string name="lan_no_auth_warn_title">关闭访问认证？</string>
+    <string name="lan_no_auth_warn_msg">打开后，同一网络里**任何**能访问到这台手机 3080 端口的设备，都能直接使用这个 Agent —— 不需要任何口令。
+
+这意味着它可以读写这台手机上的文件、执行命令，并用你配置的模型 API 花钱。
+
+· 只在家里自己的 Wi-Fi、或自己的热点下开启
+· 公共 Wi-Fi、公司网络、访客网络下务必关闭
+· 关掉这个开关即恢复需要 token 才能进入
+
+开启后访问地址会变成不带 token 的干净地址，方便手输。
+
+当前地址：
+%1$s</string>
+    <string name="lan_no_auth_on">已开启</string>
+    <string name="lan_no_auth_off">已关闭</string>
+    <string name="lan_no_auth_disable">关闭免 token</string>
 </resources>

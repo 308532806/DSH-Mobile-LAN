@@ -3,7 +3,7 @@
 **在手机上跑 DeepSeek Harness，同一 Wi-Fi 下的任何设备用浏览器直接打开使用。**
 
 [![CI](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml/badge.svg)](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml)
-![Release](https://img.shields.io/badge/release-v1.3.1--lan-blue)
+![Release](https://img.shields.io/badge/release-v1.3.2--lan-blue)
 ![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
@@ -32,6 +32,15 @@
 > 首次访问的地址里带一个一次性 token（`http://192.168.1.42:3080/?token=…`），
 > 点开即自动换取长期会话 cookie，**不需要在任何设备上登录**。
 > 地址可以直接复制（点工具栏的「局域网」按钮）。
+
+**嫌 token 麻烦？** 局域网开启后，下面会多出一个「免 token 访问」开关。
+打开它之后地址就是干净的 `http://192.168.1.42:3080/`，在平板/电脑上直接敲即可，
+不用再带那一长串 token。
+
+> ⚠️ 这个开关等于撤掉唯一的访问凭据：同一网络里**任何**能访问到该端口的设备
+> 都能直接指挥这个 Agent（读写文件、执行命令、消耗模型额度）。所以它默认关闭、
+> 开启要过风险确认，只建议在家里自己的 Wi-Fi 或自己的热点下用。
+> 防 DNS rebinding 的 Host/Origin 栅栏仍然保留 —— 去掉的只是"口令"这一层。
 
 ---
 
@@ -97,6 +106,41 @@ IP 会变，如果只把新 IP 显示给用户，设备打开会**页面能加�
 `network-security-config` 也只对回环 + RFC1918 私有网段放行明文 HTTP，
 没有开 `cleartextTrafficPermitted="true"` 的全局口子。
 
+### 5. 免 token 访问（可选）
+
+上游的浏览器认证有两道闸门，都在 `dsh-client-connection`：
+
+- `authorizeIndex()` —— 首屏 HTML：`?token=` 换持久 cookie，否则 401
+- `requestRejection()` —— 所有 `/api` 请求：先过 Host/Origin 栅栏，再查 cookie，否则 401
+
+「免 token 访问」把这两处的**拒绝分支** gated 掉（`DSH_LAN_NO_AUTH=1`），
+但**保留** `isTrustedApiRequest` 的 Host/Origin 栅栏 —— 它挡的是 DNS rebinding
+（恶意网页把域名解析到本机地址来打这个 API），局域网设备正常访问时 Host 本来就在
+信任名单里，保留它对使用者零成本。去掉的只是"口令"，不是把门整个拆了。
+
+不设该环境变量时行为与上游逐字一致（401 / 303 都不变）。
+
+### 6. Root 检测修正
+
+原项目的 root 检测只 stat 一组写死的 su 路径。真机实测（OPPO / Android 12 / Magisk alpha）
+上这些路径**全都不存在**：su 由 magic mount 挂到 `/product/bin/su` 与 `/debug_ramdisk/su`
+（都是指向 `./magisk` 的符号链接），`/system/bin/su` 根本没建立
+—— 于是"手机明明有 root，软件却检测不到"。
+
+修正三点：
+
+1. **补全路径**：加入 `/product/bin/su`（新 Magisk 常见落点）、`/debug_ramdisk/su`
+   （Magisk 24+ 真实二进制）、APatch 的 `/data/adb/ap/bin/su` 等；
+2. **删掉两个根本不是 su 的条目**：`/system/bin/busybox`（装了 busybox ≠ 有 root，
+   更糟的是它会被 `findSu()` 当成 su 交给 Root 模式启动引擎）和 `/system/bin/su.d`
+   （那是脚本目录，不是可执行文件）；
+3. **真探测用绝对路径逐个试**，而不是裸 `su` —— Android 应用的 PATH 由 zygote 设定，
+   未必包含 `/product/bin`，走 PATH 会直接 FileNotFoundException 导致误判。
+
+另外设置页的「Root 能力状态」行变成**可点击**：点一下会真跑一次 `su -c id`
+（会弹 Root 管理器的授权框），结果是权威的 —— 无论被动检测怎么说，用户都有办法自证。
+引导页在"未检测到"时，提示行同样可点重试。
+
 ---
 
 ## 构建
@@ -105,7 +149,7 @@ IP 会变，如果只把新 IP 显示给用户，设备打开会**页面能加�
 
 ```bash
 # 触发方式：推送 tag
-git tag v1.3.1-lan && git push origin v1.3.1-lan
+git tag v1.3.2-lan && git push origin v1.3.2-lan
 ```
 
 CI 流水线（`.github/workflows/android-build.yml`）会：
@@ -128,16 +172,26 @@ CI 流水线（`.github/workflows/android-build.yml`）会：
 - 模拟 Wi-Fi 网卡（`192.168.1.42`）后，日志确实输出
   `dsh web: lan url: http://192.168.1.42:3080/?token=…`
 - 开关关闭时**不打印**任何局域网地址
+- **免 token 双向验证**：同一份产物，`DSH_LAN_NO_AUTH=1` 时 `GET /` 返回 **200 + 首页**
+  （`/api` 返回 404 而非 401，说明认证层已放行），不设该变量时恢复 **401 / 带 token 303**
 - `cordis.patch.yml` 的 `!!js` 表达式用引擎同款解析器（js-yaml + 同款 Tag 定义）
   与同款求值语义（`with (ctx) { eval(expr) }`）验证：开 → `0.0.0.0`，关 → `127.0.0.1`
 - App 侧全部正则对着真实日志行跑通（含 token 提取、上游 `(LAN: …)` 段落、关闭态不误报）
-- 全部 22 个 Kotlin 源文件编译通过，新增文件零警告
-- 资源一致性：双语字符串键集对齐、`R.id`/`R.string` 引用全部存在、63 个 XML 良构
+- 全部 Kotlin 源文件编译通过，新增文件零警告
+- 资源一致性：双语字符串键集对齐、`R.id`/`R.string` 引用全部存在、XML 良构
+
+**在真机上核对过的事实（用户设备 OPPO / Android 12 / Magisk alpha）：**
+
+- `su` 实际挂载点：`/product/bin/su` 与 `/debug_ramdisk/su`（均 → `./magisk`），
+  **`/system/bin/su` 不存在** —— 这正是 root 检测失败的根因
+- `/product/bin` 权限 `drwxr-x--x`，普通应用可穿透；以应用 uid 验证两个路径均可见
+- Magisk DenyList 为空、`mnt_ns=0`，即应用**未**被 root 隐藏，排除隐藏导致的误判
 
 **未验证（需要真机）：**
 
 - APK 在真实 Android 设备上的安装与运行
 - 真机 Wi-Fi 环境下的局域网互访（本机沙箱只有 `lo`，看不到真实网卡）
+- Root 模式端到端拉起引擎（需要真机授权后才能验证）
 
 ---
 

@@ -136,7 +136,12 @@ object EngineConfig {
         // 局域网访问（LAN 模式）：这是本项目唯一的监听面开关。
         // 打开时引擎的 webserver 行会绑定 0.0.0.0（见 scripts/patch-lan-access.py），
         // 关闭时保持上游默认的 127.0.0.1。开关变化后由 App 重启引擎重新读这里。
-        if (LanGateway.isEnabled(ctx)) env.add("DSH_LAN_ACCESS=1")
+        if (LanGateway.isEnabled(ctx)) {
+            env.add("DSH_LAN_ACCESS=1")
+            // 免 token：跳过浏览器会话认证（Host/Origin 栅栏仍保留）。
+            // 只在局域网开关打开时才有意义 —— 只监听回环时本来也没有外部访问者。
+            if (LanGateway.isNoAuthEnabled(ctx)) env.add("DSH_LAN_NO_AUTH=1")
+        }
         // Perl/Ruby：编译期 @INC/$LOAD_PATH 硬编码 Termux 前缀（重写 shebang 碰不到），
         // 注入扩展内的库路径（Agent 实测注入后 json/openssl 等模块恢复正常）
         val perlLibs = extRoots.flatMap { ext ->

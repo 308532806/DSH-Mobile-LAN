@@ -80,6 +80,13 @@ class SettingsActivity : Activity() {
             showPrivDialog()
         }
 
+        // —— 权限中心：Root 能力（点击真跑一次 su 验证） ——
+        // 纯路径检查会有假阴性（su 可能挂在列表外的位置，如 Magisk 的 /product/bin/su），
+        // 所以给用户一个"真跑一次"的入口：会触发 Root 管理器的授权框，结果是权威的。
+        findViewById<LinearLayout>(R.id.rowRootProbe).setOnClickListener {
+            runRootProbe()
+        }
+
         // —— 权限中心：屏幕点击（无障碍） ——
         findViewById<LinearLayout>(R.id.rowAccess).setOnClickListener {
             handleAccessibility()
@@ -133,6 +140,12 @@ class SettingsActivity : Activity() {
             if (LanGateway.isEnabled(this)) showLanAddress() else confirmEnableLan()
         }
         refreshLanRow()
+
+        // —— 权限中心：免 token 访问（仅局域网开启时可见） ——
+        findViewById<LinearLayout>(R.id.rowLanNoAuth).setOnClickListener {
+            confirmToggleNoAuth()
+        }
+        refreshNoAuthRow()
 
         // —— 扩展中心 ——
         findViewById<LinearLayout>(R.id.rowExt).setOnClickListener {
@@ -222,11 +235,16 @@ class SettingsActivity : Activity() {
         findViewById<TextView>(R.id.valScale).text = "$pageScale%"
         findViewById<TextView>(R.id.valPriv).text = privLabel(Privilege.getMode(this))
         findViewById<TextView>(R.id.valRootStatus).let {
-            val rootOk = Privilege.rootAvailableMinimal()
+            val rootOk = Privilege.rootAvailable()
             it.text = getString(
                 if (rootOk) R.string.setting_root_status_yes else R.string.setting_root_status_no
             )
             it.setTextColor(if (rootOk) 0xFF6EE7B7.toInt() else 0xFF8A94A3.toInt())
+            // 未检测到时把副标题换成操作提示 —— 被动检查会漏（su 可能挂在列表外），
+            // 用户需要知道这里可以点一下真验证。
+            findViewById<TextView>(R.id.subRootStatus).text = getString(
+                if (rootOk) R.string.setting_root_sub else R.string.setting_root_sub_tap
+            )
         }
         refreshShizuku()
         refreshAccess()
@@ -234,6 +252,7 @@ class SettingsActivity : Activity() {
         refreshTtsRow()
         refreshNotifRow()
         refreshLanRow()
+        refreshNoAuthRow()
         refreshExt()
         // 缩放副标题文案无需变；图标着色按打开时状态由静态 XML 决定
     }
@@ -264,6 +283,81 @@ class SettingsActivity : Activity() {
         val v = findViewById<TextView>(R.id.valTts)
         v.text = if (n == 0) getString(R.string.tts_missing) else getString(R.string.tts_engines, n)
         v.setTextColor(if (n > 0) 0xFF6EE7B7.toInt() else 0xFF8A94A3.toInt())
+    }
+
+    // ================= Root 主动验证 =================
+
+    /**
+     * 真跑一次 su 验证 Root（后台线程，会弹授权框）。
+     *
+     * 存在意义：被动检测只看几个写死的路径，su 挂在别处就会误判"设备没 root"
+     * （真机事故：Magisk 的 su 在 /product/bin/su）。真执行一次是唯一权威的结论。
+     * 结果由 Privilege 缓存，成功后再刷新 UI 就会显示"已检测到"。
+     */
+    private fun runRootProbe() {
+        Toast.makeText(this, getString(R.string.setting_root_probing), Toast.LENGTH_SHORT).show()
+        Thread({
+            val ok = Privilege.runSuCheckRoot()
+            runOnUiThread {
+                Toast.makeText(
+                    this,
+                    getString(if (ok) R.string.setting_root_probe_ok else R.string.setting_root_probe_fail),
+                    Toast.LENGTH_LONG,
+                ).show()
+                // 刷新状态行与权限模式对话框的可用性（都读 Privilege.rootAvailable()）
+                refreshAll()
+            }
+        }, "root-probe").apply { isDaemon = true; start() }
+    }
+
+    /**
+     * 免 token 开关：开启前必须过风险确认（等于撤掉唯一的访问凭据），
+     * 关闭则直接生效（恢复更安全的状态不需要劝阻）。
+     */
+    private fun confirmToggleNoAuth() {
+        val on = LanGateway.isNoAuthEnabled(this)
+        if (on) {
+            applyNoAuthChange(false)
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.lan_no_auth_warn_title))
+            .setMessage(getString(R.string.lan_no_auth_warn_msg, previewLanAddress()))
+            .setNegativeButton(getString(android.R.string.cancel), null)
+            .setPositiveButton(getString(R.string.lan_dialog_enable)) { _, _ -> applyNoAuthChange(true) }
+            .showStyled()
+    }
+
+    private fun applyNoAuthChange(on: Boolean) {
+        LanGateway.setNoAuthEnabled(this, on)
+        // 认证是引擎启动时装配的（connect 层的 browserAuth），必须重启才生效
+        (application as DshApp).supervisor.restart()
+        refreshNoAuthRow()
+        refreshLanRow()
+        Toast.makeText(
+            this,
+            getString(
+                R.string.lan_restart_hint,
+                getString(if (on) R.string.lan_no_auth_on else R.string.lan_no_auth_off),
+            ),
+            Toast.LENGTH_LONG,
+        ).show()
+    }
+
+    /** 免 token 行：仅在局域网开启时出现；开启时绿字并把干净地址写进副标题 */
+    private fun refreshNoAuthRow() {
+        val lanOn = LanGateway.isEnabled(this)
+        val row = findViewById<LinearLayout>(R.id.rowLanNoAuth)
+        row.visibility = if (lanOn) android.view.View.VISIBLE else android.view.View.GONE
+        if (!lanOn) return
+
+        val on = LanGateway.isNoAuthEnabled(this)
+        val v = findViewById<TextView>(R.id.valLanNoAuth)
+        val sub = findViewById<TextView>(R.id.subLanNoAuth)
+        v.text = getString(if (on) R.string.lan_no_auth_on else R.string.lan_no_auth_off)
+        v.setTextColor(if (on) 0xFF6EE7B7.toInt() else 0xFF8A94A3.toInt())
+        val clean = (application as DshApp).supervisor.lanUrl()
+        sub.text = if (on && clean != null) clean else getString(R.string.setting_lan_no_auth_sub)
     }
 
     // ================= 局域网访问（LAN 模式） =================
@@ -355,7 +449,12 @@ class SettingsActivity : Activity() {
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.lan_share_title))
             .setMessage(getString(R.string.lan_share_msg, url))
-            .setNeutralButton(getString(R.string.lan_dialog_disable)) { _, _ -> applyLanChange(false) }
+            .setNeutralButton(
+                if (LanGateway.isNoAuthEnabled(this)) getString(R.string.lan_no_auth_disable)
+                else getString(R.string.lan_dialog_disable)
+            ) { _, _ ->
+                if (LanGateway.isNoAuthEnabled(this)) applyNoAuthChange(false) else applyLanChange(false)
+            }
             .setNegativeButton(getString(R.string.lan_share_close), null)
             .setPositiveButton(getString(R.string.lan_share_copy)) { _, _ -> copyLanAddress(url) }
             .showStyled()
@@ -491,7 +590,7 @@ class SettingsActivity : Activity() {
     private fun showPrivDialog() {
         val current = Privilege.getMode(this)
         val shizukuOk = Privilege.shizukuServerRunning()
-        val rootOk = Privilege.rootAvailableMinimal()
+        val rootOk = Privilege.rootAvailable()
 
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
