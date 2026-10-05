@@ -34,10 +34,11 @@ import sys
 WHITELIST = {
     'libcrypto.so', 'libssl.so', 'libz.so', 'libsqlite3.so',
     'libc.so', 'libm.so', 'libdl.so',
-    # 项目自己的「运行时命令闭包」校验（CI）要求这两个存在 —— 那是上游作者在
-    # 真机 CANNOT LINK 事故后加的名单。按 NEEDED 扫描其实无人依赖，但体积很小
-    # （压缩后合计约 0.6MB），保留以维持既有安全网不变。
-    'libhistory.so.8', 'libncurses.so.6',
+    # 项目自己的「运行时命令闭包」校验（CI）要求的名单 —— 那是上游作者在真机
+    # CANNOT LINK 事故后加的。整体纳入保留：它们很小，而这条安全网的价值高于
+    # 省下的几百 KB。
+    'libreadline.so.8', 'libhistory.so.8', 'libncursesw.so.6',
+    'libncurses.so.6', 'libiconv.so', 'libpcre2-8.so',
 }
 
 
@@ -81,11 +82,17 @@ def main() -> None:
     print(f'扫描 {len(elfs)} 个 ELF 文件…')
     required = needed_names(elfs)
     print(f'被需要的库名共 {len(required)} 个')
+    # 守卫：一个都没扫到说明 readelf 不可用或扫描逻辑坏了 —— 此时继续下去会把
+    # 几乎所有库都当"没人需要"删掉（实测踩过：CI 上就是这样删掉了 libreadline.so.8）
+    if not required:
+        sys.exit('致命：一个被需要的库名都没扫到（readelf 不可用？）—— 中止，绝不继续删')
+    print('被需要的名字: ' + ' '.join(sorted(required)))
 
     before = {f for f in os.listdir(libdir) if os.path.isfile(os.path.join(libdir, f))}
 
     removed = kept = 0
     freed = 0
+    deleted = []
     for f in sorted(os.listdir(libdir)):
         p = os.path.join(libdir, f)
         if not os.path.isfile(p) or not is_elf(p):
@@ -96,7 +103,10 @@ def main() -> None:
         freed += os.path.getsize(p)
         os.remove(p)
         removed += 1
+        deleted.append(f)
     print(f'删除无用库副本 {removed} 个，保留 {kept} 个，释放 {freed/1048576:.1f} MB（解压后）')
+    if deleted:
+        print('删掉的是: ' + ' '.join(deleted))
 
     # 断言 1（硬性）：原本就在 lib/ 里、且被需要的文件，删减后必须还在。
     # 这正是"不要删错"的核心保证 —— 违反说明删除规则有 bug，构建必须红。
