@@ -255,7 +255,7 @@ Current address:
     <string name="lan_no_auth_disable">Require token</string>
     <string name="settings_section_model">Model</string>
     <string name="setting_default_reasoning">Default reasoning effort</string>
-    <string name="setting_default_reasoning_sub">Give every model a reasoning-effort selector (hand-declared models have none by default)</string>
+    <string name="setting_default_reasoning_sub">Adds low / medium / high to models that declare no thinking levels — including every hand-declared one. Nothing changes in requests until you actually pick a level.</string>
     <string name="default_reasoning_warn_title">Enable reasoning effort for all models?</string>
     <string name="default_reasoning_warn_msg">Models that do not declare their thinking levels (all hand-declared ones) currently show no effort selector at all. Turning this on gives them low / medium / high plus off.
 

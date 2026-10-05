@@ -255,7 +255,7 @@
     <string name="lan_no_auth_disable">关闭免 token</string>
     <string name="settings_section_model">模型</string>
     <string name="setting_default_reasoning">默认开启思考强度</string>
-    <string name="setting_default_reasoning_sub">给每个模型都补上思考强度选择（手工声明的模型默认没有）</string>
+    <string name="setting_default_reasoning_sub">给没声明思考档位的模型（含全部自定义的）补上 低/中/高。不选档位时请求形态完全不变。</string>
     <string name="default_reasoning_warn_title">给所有模型开启思考强度？</string>
     <string name="default_reasoning_warn_msg">没有声明思考档位的模型（手工声明的都属于这类）目前完全不显示思考强度选择。打开后会给它们补上 低/中/高 以及「关闭」四档。
 

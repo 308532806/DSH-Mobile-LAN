@@ -79,6 +79,17 @@ console.log('=== 场景 2：开关关闭（必须与上游逐字一致）===');
   check(r3.reasoning === true, '跟随 catalog 的 true');
 }
 
+console.log('=== 场景 2b：开关打开，但目录已声明过该模型（补丁不得覆盖它的 wire 拼写）===');
+{
+  const r = run('switch on, entry 未声明, base={reasoning:true}', '1', { id: 'm' }, { reasoning: true });
+  check(r.reasoning === true, '透传目录的能力');
+  check(r.thinkingLevelMap === undefined,
+        '不写入我们那套通用档位（目录模型有自己的 wire 拼写，覆盖会弄坏它们）');
+  const r2 = run('switch on, entry 未声明, base={reasoning:false}', '1', { id: 'm' }, { reasoning: false });
+  check(r2.reasoning === true && r2.thinkingLevelMap !== undefined,
+        '目录明确说"不支持思考"时仍补档位（用户显式开了开关）');
+}
+
 console.log('=== 场景 3：用户自己声明了 reasoningEfforts（补丁不得干预）===');
 {
   const r = run('entry 已声明 {off:null,high:"high"}', '1', { id: 'm', reasoningEfforts: { off: null, high: 'high' } }, undefined);

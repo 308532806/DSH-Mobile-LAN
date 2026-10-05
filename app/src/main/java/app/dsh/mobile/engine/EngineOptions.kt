@@ -27,10 +27,18 @@ object EngineOptions {
     private const val PREFS = "dsh_ui"
     private const val KEY_DEFAULT_REASONING = "default_reasoning"
 
-    /** 是否给所有模型补上思考档位（注入 DSH_DEFAULT_REASONING=1） */
+    /**
+     * 是否给没声明档位的模型补上思考档位（注入 DSH_DEFAULT_REASONING=1）。
+     *
+     * **默认开启**：自定义/手工声明的模型本来完全没有思考强度可选，而打开本开关
+     * 并不会改变请求形态 —— 不选档位时 effort 为 undefined，pi-ai 根本不发这个
+     * 参数（见 dsh-llm-pi-ai 的 resolveReasoningLevel：effort 为 undefined 直接返回）。
+     * 只有用户主动选了某个档位，请求才会带上它。所以默认开启是安全的，
+     * 真正的风险（供应商不认这个参数）只在用户主动选择时才可能出现。
+     */
     fun isDefaultReasoning(ctx: Context): Boolean =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(KEY_DEFAULT_REASONING, false)
+            .getBoolean(KEY_DEFAULT_REASONING, true)
 
     fun setDefaultReasoning(ctx: Context, on: Boolean) {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
