@@ -106,6 +106,7 @@ def main() -> None:
             groups.setdefault(k, []).append(f)
 
     freed = renamed = copied = removed = 0
+    trace = {}                      # 基名 -> 决策记录（失败时打印，便于定位）
     for k, forms in sorted(groups.items()):
         if len(forms) < 2:
             continue
@@ -130,6 +131,7 @@ def main() -> None:
         # 只是保险，不该抢走真身 —— 按字母序取第一个会让 libz.so 抢在
         # libz.so.1 前面，把真身改名成裸名、而真正被需要的 libz.so.1 变成悬空链接。
         keep = next((f for f in want if f in needed), want[0])
+        trace[k] = f'forms={forms} want={want} real={real} keep={keep}'
         if real != keep:
             os.rename(os.path.join(libdir, real), os.path.join(libdir, keep))
             renamed += 1
@@ -177,6 +179,11 @@ def main() -> None:
               'libandroid-spawn.so', 'libstdc++.so'}
     missing = [m for m in missing if m not in SYSTEM]
     if missing:
+        print('--- 各分组决策 ---')
+        for k, v in sorted(trace.items()):
+            print(f'  {k}: {v}')
+        print('--- lib/ 现有文件 ---')
+        print('  ' + ' '.join(sorted(os.listdir(libdir))))
         sys.exit('致命：以下被需要的库在裁剪后不存在（构建中止）：\n  ' + '\n  '.join(missing))
     print('校验通过：所有被需要的库名都以实体文件存在 ✓')
 
