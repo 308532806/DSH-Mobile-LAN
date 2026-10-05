@@ -4,7 +4,7 @@
 **在手机上跑 DeepSeek Harness，同一 Wi-Fi 下的任何设备用浏览器直接打开使用。**
 
 [![CI](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml/badge.svg)](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml)
-![Release](https://img.shields.io/badge/release-v1.3.13--lan-blue)![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-green)
+![Release](https://img.shields.io/badge/release-v1.3.14--lan-blue)![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
 ---
@@ -249,7 +249,7 @@ dsh 把「思考强度」当作**每个模型自己声明的能力**：
 
 ```bash
 # 触发方式：推送 tag
-git tag v1.3.13-lan && git push origin v1.3.13-lan
+git tag v1.3.14-lan && git push origin v1.3.14-lan
 ```
 
 CI 流水线（`.github/workflows/android-build.yml`）会：

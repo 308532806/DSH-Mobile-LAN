@@ -208,7 +208,13 @@ jobs:
             || { echo "::error::插件文件缺失"; exit 1; }
           test -f app/src/main/assets/plugins/dsh-prompt-polish/LICENSE \
             || { echo "::error::插件 LICENSE 缺失（AGPL 要求保留）"; exit 1; }
-          echo "插件就绪：$(du -sh app/src/main/assets/plugins/dsh-prompt-polish | cut -f1)"
+          # 生成确定性的文件清单：App 侧按清单逐个 open() 复制。
+          # 不用 AssetManager.list() 递归 —— 实测它在目录形态下返回空，
+          # 会导致安装器误判"本构建未内置该插件"而静默跳过。
+          cd app/src/main/assets/plugins/dsh-prompt-polish
+          find . -type f ! -name FILELIST.txt | sed 's|^\./||' | sort > FILELIST.txt
+          cd - > /dev/null
+          echo "插件就绪：$(du -sh app/src/main/assets/plugins/dsh-prompt-polish | cut -f1)，$(wc -l < app/src/main/assets/plugins/dsh-prompt-polish/FILELIST.txt) 个文件"
 
       - name: 安装 JDK 17
         uses: actions/setup-java@v4

@@ -75,9 +75,21 @@ object PluginInstaller {
         val assetPath = "$ASSET_ROOT/$assetName"
         // assets 里没有这个插件（例如本地构建未跑 CI 的铺包步骤）→ 跳过，
         // 不要建空目录，否则引擎会去加载一个残包
-        val listing = runCatching { ctx.assets.list(assetPath)?.toList() }.getOrNull()
-        if (listing.isNullOrEmpty()) {
+        // 文件清单由构建期生成（assets 里随包分发）。
+        // **刻意不用 AssetManager.list() 递归** —— 真机实测它在目录形态下返回空数组，
+        // 会让安装器误判"本构建未内置该插件"而静默跳过（我因此排查了一轮）。
+        // 走清单 + assets.open() 逐个复制，与 priv-mode.mjs 用的是同一条已验证的路径。
+        val listText = readAssetText(ctx, "$assetPath/FILELIST.txt")
+        if (listText.isNullOrBlank()) {
             Log.i(TAG, "$assetName not bundled in this build; skipped")
+            trace(ctx, "$assetName: no FILELIST.txt in assets -> skipped")
+            return false
+        }
+        val entries = listText.lineSequence().map { it.trim() }
+            .filter { it.isNotEmpty() && !it.contains("..") && !it.startsWith("/") }
+            .toList()
+        if (entries.isEmpty()) {
+            Log.w(TAG, "$assetName has an empty FILELIST; skipped")
             return false
         }
 
@@ -95,33 +107,45 @@ object PluginInstaller {
         if (assetVersion != null && assetVersion == installedVersion &&
             File(dest, "lib/client.js").isFile
         ) {
+            trace(ctx, "$assetName: already at $assetVersion -> no-op")
             return false
         }
 
         // 覆盖式铺开：先删旧包（避免残留旧文件影响加载）
         if (dest.exists()) dest.deleteRecursively()
         dest.mkdirs()
-        copyAssetDir(ctx, assetPath, dest)
-        Log.i(TAG, "installed $pkgName (assetVersion=$assetVersion, was=$installedVersion)")
+        var copied = 0
+        for (rel in entries) {
+            val out = File(dest, rel)
+            out.parentFile?.mkdirs()
+            runCatching {
+                ctx.assets.open("$assetPath/$rel").use { input ->
+                    out.outputStream().use { input.copyTo(it) }
+                }
+            }.onFailure { Log.w(TAG, "copy $rel failed: ${it.message}") }
+            copied++
+        }
+        Log.i(TAG, "installed $pkgName: $copied file(s), assetVersion=$assetVersion, was=$installedVersion")
+        trace(ctx, "$pkgName: installed $copied file(s) (asset=$assetVersion, was=$installedVersion) -> $dest")
         return true
-    }
-
-    /** 递归复制 assets 目录（assets 的 list() 不返回子目录中的文件，需要逐层下钻） */
-    private fun copyAssetDir(ctx: Context, assetPath: String, dest: File) {
-        val children = ctx.assets.list(assetPath).orEmpty()
-        if (children.isEmpty()) {
-            // 叶子：是文件
-            dest.parentFile?.mkdirs()
-            ctx.assets.open(assetPath).use { input -> dest.outputStream().use { input.copyTo(it) } }
-            return
-        }
-        dest.mkdirs()
-        for (name in children) {
-            copyAssetDir(ctx, "$assetPath/$name", File(dest, name))
-        }
     }
 
     private fun readAssetText(ctx: Context, assetPath: String): String? = runCatching {
         ctx.assets.open(assetPath).bufferedReader().use { it.readText() }
     }.getOrNull()
+
+    /**
+     * 落盘一行诊断（engine/plugin-install.log）。
+     *
+     * 为什么不只靠 Log.i：真机排查时 logcat 缓冲早已被冲掉（这台设备上 Minis 自身
+     * 日志量很大），结果"安装器到底跑没跑"完全无从判断。写文件后可以直接 cat，
+     * 与 engine.log 同一个目录、同样便于用户导出反馈。
+     */
+    private fun trace(ctx: Context, msg: String) {
+        runCatching {
+            val f = File(EngineConfig.engineRoot(ctx), "plugin-install.log")
+            if (f.length() > 64 * 1024) f.writeText("")
+            f.appendText("${System.currentTimeMillis()} $msg\n")
+        }
+    }
 }
