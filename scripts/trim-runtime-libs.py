@@ -34,6 +34,10 @@ import sys
 WHITELIST = {
     'libcrypto.so', 'libssl.so', 'libz.so', 'libsqlite3.so',
     'libc.so', 'libm.so', 'libdl.so',
+    # 项目自己的「运行时命令闭包」校验（CI）要求这两个存在 —— 那是上游作者在
+    # 真机 CANNOT LINK 事故后加的名单。按 NEEDED 扫描其实无人依赖，但体积很小
+    # （压缩后合计约 0.6MB），保留以维持既有安全网不变。
+    'libhistory.so.8', 'libncurses.so.6',
 }
 
 
