@@ -45,8 +45,6 @@ jobs:
           # 本 fork 与它已**无共同祖先** —— 此时 merge 会把每个文件都当成「双方各自新增」，
           # 必然全冲突。检测到这种情况就明确报告并停止，不再每 6 小时报一次红。
           BASE=$(git merge-base HEAD upstream/main || true)
-          echo "诊断: HEAD=$(git rev-parse --short HEAD) upstream/main=$(git rev-parse --short upstream/main)"
-          echo "诊断: merge-base 结果='$BASE'"
           if [ -z "$BASE" ]; then
             echo "no_ancestor=1" >> "$GITHUB_OUTPUT"
             echo "up_to_date=1" >> "$GITHUB_OUTPUT"
@@ -65,6 +63,7 @@ jobs:
           fi
 
       - name: 合并上游（只自动解决版本号冲突）
+        id: merge
         if: steps.fetch.outputs.up_to_date == '0'
         run: |
           set +e
@@ -80,8 +79,13 @@ jobs:
           echo "冲突文件: $CONFLICTS"
           if [ "$CONFLICTS" != "app/build.gradle.kts " ]; then
             git merge --abort
-            echo "::error::上游修改与本地改动发生冲突（$CONFLICTS），需要人工处理后再同步"
-            exit 1
+            # 冲突是这类 fork 的常态（上游很活跃，和我们改同一批文件）。
+            # 这里**不用失败**：每 6 小时红一次会让红色变成噪音，真出别的错时反而看不见。
+            # 改成明确警告 + 运行摘要里列出冲突文件，需要同步时人工处理。
+            echo "conflict=1" >> "$GITHUB_OUTPUT"
+            echo "conflict_files=$CONFLICTS" >> "$GITHUB_OUTPUT"
+            echo "::warning::上游改动与本地冲突（$CONFLICTS），已跳过自动合并 —— 需要人工把改动重新落到上游树上"
+            exit 0
           fi
           # 版本号冲突：取上游的声明，稍后由 bump 脚本重新盖上我们的版本号
           git checkout --theirs -- app/build.gradle.kts
@@ -92,17 +96,17 @@ jobs:
       # 合并后先跑补丁锚点夹具测试：上游若改了 cordis.patch.yml 的形状，
       # 这里就会红，而不是等到用户装上去发现功能没了
       - name: 校验补丁锚点仍然可用
-        if: steps.fetch.outputs.up_to_date == '0'
+        if: steps.fetch.outputs.up_to_date == '0' && steps.merge.outputs.conflict != '1'
         run: node scripts/test-lan-pick.js
 
       - name: 推送合并结果
-        if: steps.fetch.outputs.up_to_date == '0'
+        if: steps.fetch.outputs.up_to_date == '0' && steps.merge.outputs.conflict != '1'
         run: git push origin HEAD:main
 
       # 只有上游发了新 Release 才给我们自己打版本号 + tag。
       # 标记 tag 用 upstream/<tag> 形式（不以 v 开头，不会触发发布流程）
       - name: 上游若有新 Release，则升版本并发布
-        if: steps.fetch.outputs.up_to_date == '0'
+        if: steps.fetch.outputs.up_to_date == '0' && steps.merge.outputs.conflict != '1'
         id: rel
         run: |
           # ⚠️ 必须查上游远端，不能 `git tag --list 'v*'`：本仓库同时有 fork 继承来的
@@ -153,6 +157,15 @@ jobs:
               echo "上游最近提交："
               echo '```'
               git log --oneline upstream/main | head -10
+              echo '```'
+            elif [ "${{ steps.merge.outputs.conflict }}" = "1" ]; then
+              echo "⚠️ **上游有改动，但与本地冲突，已跳过自动合并。**"
+              echo ""
+              echo "需要同步时在对话里让 AI 处理（把本 fork 的改动重新落到上游树上）。"
+              echo ""
+              echo "冲突文件："
+              echo '```'
+              echo "${{ steps.merge.outputs.conflict_files }}" | tr ' ' '\n'
               echo '```'
             elif [ "${{ steps.fetch.outputs.up_to_date }}" = "1" ]; then
               echo "- 上游无新提交，未做任何改动"
