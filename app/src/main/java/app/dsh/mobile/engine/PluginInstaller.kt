@@ -30,8 +30,8 @@ import java.io.File
  *
  * ## 许可
  *
- * dsh-prompt-polish 是 AGPL-3.0（本项目 MIT）。这里只做"原样复制"，
- * 不修改其源码，包内 LICENSE 原样保留。
+ * dsh-prompt-polish 是 AGPL-3.0、dsh-web-mobile 是 MIT（本项目 MIT）。这里只做
+ * "原样复制"，不修改其源码，包内 LICENSE 原样保留。
  */
 object PluginInstaller {
 
@@ -40,6 +40,8 @@ object PluginInstaller {
     /** assets 下的目录名 -> profile node_modules 里的包名（两者不同，别混） */
     private val PLUGINS = mapOf(
         "dsh-prompt-polish" to "@benrong/dsh-prompt-polish",
+        // 移动端适配（设置等弹窗底部 sheet 化）——实测 3.0.4 与宿主 0.2.0-rc.2 配合正常
+        "dsh-web-mobile" to "dsh-web-mobile",
     )
 
     private const val ASSET_ROOT = "plugins"

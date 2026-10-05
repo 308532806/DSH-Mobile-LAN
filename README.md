@@ -220,7 +220,25 @@ dsh 把「思考强度」当作**每个模型自己声明的能力**：
 > 源码未作任何修改，包内 LICENSE 原样保留。若你要再分发本 APK，请留意 AGPL 的
 > 相应义务（向使用者提供对应源码等）。
 
-### 10. Root 检测修正
+### 10. 内置插件：移动端适配（dsh-web-mobile）
+
+手机竖屏下 WebUI 的弹窗（**设置**、文件树、预览）原本按桌面布局渲染：设置面板里
+左导航占掉将近一半宽度，右侧内容被挤到每个字单独换行（"竖排单字"），基本没法用。
+本版内置 [dsh-web-mobile](https://github.com/mexiaosqwq/dsh-web-mobile)
+（npm `dsh-web-mobile@3.0.4`，MIT 许可）：
+
+- **设置等弹窗改为全宽底部面板**，导航变成**顶部横滑标签**；
+- 同时带来窄屏抽屉侧栏、输入区元素不重叠、大响应体自动压缩等移动端适配。
+
+选它的理由：明确声明兼容 dsh `0.2.0-rc.2`、零运行时依赖、纯公开插件机制
+（`dsh.client` 声明 + overlay insert 行），且已被同类安卓启动器 DSHA 内置采用。
+
+集成方式与提示词润色（上一节）相同：CI 从 npm 取固定版本、**按 sha256 校验**后
+随 APK 打包，首次启动复制到 profile 的 `node_modules` 并由 overlay 激活。
+铺包只带运行所需文件（`lib/` 下 4 个运行时 js + `package.json` + `cordis.patch.yml`
++ `LICENSE`；类型声明与 sourcemap 剔除 —— 运行时零影响，省 ~690KB）。
+
+### 11. Root 检测修正
 
 原项目的 root 检测只 stat 一组写死的 su 路径。真机实测（OPPO / Android 12 / Magisk alpha）
 上这些路径**全都不存在**：su 由 magic mount 挂到 `/product/bin/su` 与 `/debug_ramdisk/su`

@@ -216,6 +216,47 @@ jobs:
           cd - > /dev/null
           echo "插件就绪：$(du -sh app/src/main/assets/plugins/dsh-prompt-polish | cut -f1)，$(wc -l < app/src/main/assets/plugins/dsh-prompt-polish/FILELIST.txt) 个文件"
 
+      # 内置插件：dsh-web-mobile（移动端适配 —— 设置等弹窗在窄屏下的底部 sheet 化）。
+      # MIT 许可。固定版本 + sha256 校验；只铺运行需要的文件：lib 下 4 个运行时
+      # js（client.js 是自包含模块图；index/compress/delete-session 是宿主半）
+      # + package.json + cordis.patch.yml + LICENSE，剔除 types/ 与 *.map
+      # （实测对运行零影响：省 ~690KB、FILELIST 从 90 行降到 7 行）。
+      # ⚠️ 3.0.4 是实测过与宿主 dsh 0.2.0-rc.2 配合正常的版本（设置界面全宽底部
+      #    面板、顶部横滑标签）；升级版本前先在设备或用独立实例验证后再改这里。
+      - name: 准备内置插件（dsh-web-mobile）
+        run: |
+          curl -fsSL -o /tmp/wm.tgz \
+            "https://registry.npmjs.org/dsh-web-mobile/-/dsh-web-mobile-3.0.4.tgz"
+          echo "2e3d83ed3ef7e47dbf805a4aade3fd13e6369353b57a776f371ebb8b76a333c2  /tmp/wm.tgz" \
+            | sha256sum -c - \
+            || { echo "::error::插件包校验失败（上游可能改了同版本的内容）"; exit 1; }
+          rm -rf /tmp/wmx app/src/main/assets/plugins/dsh-web-mobile
+          mkdir -p /tmp/wmx app/src/main/assets/plugins/dsh-web-mobile
+          tar xzf /tmp/wm.tgz -C /tmp/wmx
+          cp -a /tmp/wmx/package/lib \
+                /tmp/wmx/package/package.json \
+                /tmp/wmx/package/cordis.patch.yml \
+                /tmp/wmx/package/LICENSE \
+                app/src/main/assets/plugins/dsh-web-mobile/
+          # 只留运行时文件（client.js 自包含全部源码分片；宿主半是 index/compress/
+          # delete-session 三个 js）。types/ 与 sourcemap 运行时不加载。
+          rm -rf app/src/main/assets/plugins/dsh-web-mobile/lib/types
+          find app/src/main/assets/plugins/dsh-web-mobile -name '*.map' -delete
+          test -f app/src/main/assets/plugins/dsh-web-mobile/lib/client.js \
+            || { echo "::error::插件文件缺失"; exit 1; }
+          test -f app/src/main/assets/plugins/dsh-web-mobile/lib/index.js \
+            || { echo "::error::插件宿主半缺失"; exit 1; }
+          test -f app/src/main/assets/plugins/dsh-web-mobile/package.json \
+            || { echo "::error::插件 package.json 缺失"; exit 1; }
+          test -f app/src/main/assets/plugins/dsh-web-mobile/cordis.patch.yml \
+            || { echo "::error::插件 cordis.patch.yml 缺失（bundle 声明）"; exit 1; }
+          test -f app/src/main/assets/plugins/dsh-web-mobile/LICENSE \
+            || { echo "::error::插件 LICENSE 缺失"; exit 1; }
+          cd app/src/main/assets/plugins/dsh-web-mobile
+          find . -type f ! -name FILELIST.txt | sed 's|^\./||' | sort > FILELIST.txt
+          cd - > /dev/null
+          echo "插件就绪：$(du -sh app/src/main/assets/plugins/dsh-web-mobile | cut -f1)，$(wc -l < app/src/main/assets/plugins/dsh-web-mobile/FILELIST.txt) 个文件"
+
       - name: 安装 JDK 17
         uses: actions/setup-java@v4
         with:

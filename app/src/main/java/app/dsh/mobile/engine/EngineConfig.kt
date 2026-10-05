@@ -155,11 +155,18 @@ object EngineConfig {
      */
     private fun bundledPluginRows(ctx: android.content.Context): String {
         val rows = StringBuilder()
-        for ((assetName, pkgName) in listOf("dsh-prompt-polish" to "@benrong/dsh-prompt-polish")) {
+        // (assets 目录名, node_modules 包名, overlay 里的 entry id)
+        val bundled = listOf(
+            Triple("dsh-prompt-polish", "@benrong/dsh-prompt-polish", "prompt-polish"),
+            Triple("dsh-web-mobile", "dsh-web-mobile", "dsh-web-mobile"),
+        )
+        for ((assetName, pkgName, entryId) in bundled) {
             if (PluginInstaller.isInstalled(ctx, assetName)) {
                 // overlay 顶层是一个 patch 条目序列；这里再追加一个 insert 条目即可
                 // （与上面 priv-mode 那段并列，不是新文档）。
-                rows.append("\n|- insert:\n|    - id: prompt-polish\n|      name: \"")
+                rows.append("\n|- insert:\n|    - id: ")
+                    .append(entryId)
+                    .append("\n|      name: \"")
                     .append(pkgName)
                     .append("\"\n")
             }

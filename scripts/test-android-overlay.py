@@ -59,14 +59,30 @@ def main() -> None:
     if not docs:
         sys.exit('FATAL: overlay 解析出 0 个文档')
 
-    ids = []
-    for d in docs:
-        if isinstance(d, dict) and 'insert' in d:
-            ids += [x.get('id') for x in d['insert']]
-        elif isinstance(d, list):
-            ids += [r.get('id') for r in d if isinstance(r, dict) and r.get('id')]
-        elif isinstance(d, dict) and d.get('id'):
-            ids.append(d['id'])
+    def collect_ids(documents):
+        """收集所有 patch 行的 id（含 insert 条目里嵌套的 id）。"""
+        found = []
+
+        def add_row(row):
+            if not isinstance(row, dict):
+                return
+            if row.get('id'):
+                found.append(row['id'])
+            ins = row.get('insert')
+            if isinstance(ins, list):
+                for x in ins:
+                    if isinstance(x, dict) and x.get('id'):
+                        found.append(x['id'])
+
+        for doc in documents:
+            if isinstance(doc, list):
+                for row in doc:
+                    add_row(row)
+            else:
+                add_row(doc)
+        return found
+
+    ids = collect_ids(docs)
 
     print(f'overlay YAML 合法：{len(docs)} 个文档，patch 行 id = {ids}')
     # 关键行必须仍在（上游若改名，这里会先于用户发现）
@@ -74,6 +90,38 @@ def main() -> None:
         if need not in ids:
             sys.exit(f'FATAL: overlay 里缺少必需的 patch 行：{need}')
     print('必需行齐全 ✓')
+
+    # ── 追加「内置插件行」后再验证一遍 ──────────────────────────────────────
+    # 插件行由 bundledPluginRows() 在运行时 append，不在上面的原始字符串里。
+    # 从源码提取插件三元组（assets 名, 包名, entry id）并复刻 append 格式，
+    # 保证「主 body + 插件行」拼起来仍是合法 YAML。
+    #   ⚠️ 改 bundledPluginRows 的输出形状时，同步更新这里的复刻逻辑。
+    if '\\n|- insert:\\n|    - id: ' not in src:
+        sys.exit('FATAL: bundledPluginRows() 的输出格式变了 —— 请同步更新本测试')
+
+    mb = re.search(r'val bundled = listOf\((.*?)\)\s*\n', src, re.S)
+    if not mb:
+        sys.exit('FATAL: 找不到 bundledPluginRows 的插件列表 —— 请同步更新本测试')
+    triples = re.findall(r'Triple\("([^"]+)",\s*"([^"]+)",\s*"([^"]+)"\)', mb.group(1))
+    if not triples:
+        sys.exit('FATAL: bundledPluginRows 的插件列表解析为空')
+
+    text2 = text
+    for _asset, pkg, entry_id in triples:
+        text2 += '\n- insert:\n    - id: ' + entry_id + '\n      name: "' + pkg + '"\n'
+
+    try:
+        docs2 = [d for d in yaml.load_all(text2, Loader=JsTag) if d is not None]
+    except Exception as e:
+        print('含插件行的 overlay：')
+        print('\n'.join(f'  {i:>3} | {l}' for i, l in enumerate(text2.split('\n'), 1)))
+        sys.exit(f'FATAL: 含插件行的 overlay 解析失败 —— 引擎会起不来：{e}')
+
+    ids2 = collect_ids(docs2)
+    for _asset, pkg, entry_id in triples:
+        if entry_id not in ids2:
+            sys.exit(f'FATAL: 插件行 {entry_id}（{pkg}）不在解析结果里')
+    print(f'含 {len(triples)} 条插件行的 overlay 合法 ✓')
 
 
 if __name__ == '__main__':
