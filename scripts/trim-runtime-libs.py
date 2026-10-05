@@ -1,46 +1,52 @@
 #!/usr/bin/env python3
-"""裁剪运行时的库别名：每组收敛成一个实体文件，命名成「真正被需要的那个名字」。
+"""裁剪运行时的库别名：每组收敛成「被需要的名字以实体文件存在」。
 
 ## 问题是什么
 
-Termux 的 .deb 里，ICU 这类库是「一个真身 + 若干符号链接」：
+Termux 的 .deb 里，同一个库常有多个名字（一个真身 + 若干符号链接）：
+
     libicudata.so.78.3    真身（31.6MB）
-    libicudata.so.78      -> .so.78.3    符号链接
-    libicudata.so         -> .so.78.3    符号链接
+    libicudata.so.78      -> .so.78.3     符号链接
+    libicudata.so         -> .so.78.3     符号链接
 
-`dpkg-deb -x` 会保留这些链接 ✓，但打包用的 `zip` **默认会把符号链接解引用**
-（除非给 -y）。于是 zip 里变成三份 31.6MB 实体 —— 一个库就白占 63MB。
+`dpkg-deb -x` 会保留链接，但打包用的 `zip` **默认把符号链接解引用**（除非 -y），
+于是 zip 里变成三份 31.6MB 实体 —— 一个库白占 63MB。
+（Android 侧解包是 java.util.zip，它也不认符号链接条目，所以不能靠 -y 解决。）
 
-（Android 侧的解包是 java.util.zip，它也不认符号链接条目，所以不能靠 -y 解决；
- 必须在构建期就把链接收敛掉。）
+## 做法（不依赖顺序，按"保证"写）
 
-## 做法
+Android linker 按 NEEDED 里记录的**精确文件名**查找，所以只要保证
+「被需要的每个名字」都以实体文件存在即可，其余形态全删：
 
-Android linker 按 NEEDED 里记录的**精确文件名**查找，所以每组只要保证
-「被需要的那个名字」以实体文件存在即可：
+  1. 扫描全部 ELF 的 DT_NEEDED → needed；再加一份白名单（闭包校验要求的名字 +
+     可能被 dlopen 的裸名）→ required
+  2. 按「去版本后缀的基名」把 lib/ 分组
+  3. 每组：
+       · 找出一份"真内容"（组内任一真实文件；全是链接就解析到实际目标）
+       · 保留名 keep 优先取「真正被 NEEDED 的名字」，白名单名只作兜底
+       · 把真内容**落地到 keep**（必要时先删掉同名链接再复制，避免写穿链接）
+       · 组内其余 required 名字 → 各复制一份实体
+       · 其余名字（链接、多余实体）→ 删除
+  4. 断言：required 里每个名字都必须是**实体文件**（不是悬空链接）
 
-  · 扫描全部 ELF 的 DT_NEEDED，得到"被需要的名字"集合（外加一份白名单）
-  · 把每个库文件按「去版本后缀的基名」分组
-  · 组内挑出被需要的名字 → 把真身**改名**成它（若真身本就叫这个名字则不动）
-  · 若组内有两个名字都被需要 → 再复制一份（罕见，且都很小）
-  · 组内其余名字（符号链接与多余的实体）一律删除
+## 踩过的坑（都有实测依据）
 
-## 护栏
-
-  · 一个被需要的名字都没扫到 → 立即中止（说明 readelf 挂了，绝不能继续删）
-  · 收尾时断言：所有被需要的名字都必须以实体文件存在，否则构建失败
-  · 白名单里的名字永不删除
+  · 往已存在的符号链接写文件会**写穿**到链接目标（悬空链接 exists() 为假，
+    直接 open(p,'wb') 会去创建它的目标）→ 必须先 lexists 删除再写
+  · 保留名不能按字母序取：libz 组里 libz.so 会抢在 libz.so.1 前面
+  · 也不能用 want[1:] 取"其余"：keep 未必是 want[0]，会漏掉 want[0]
+  · readelf 不可用时 needed 为空 → 会把几乎所有库删光，必须硬性中止
 
 用法: trim-runtime-libs.py <runtime 根目录>
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 
-# 项目自己的「运行时命令闭包」校验（CI）要求的名单 —— 上游作者在真机
-# CANNOT LINK 事故后加的。整体纳入保留：它们很小，而这条安全网价值更高。
-# 裸名那几个则是「可能被 dlopen」，NEEDED 扫不到。
+# 裸名可能被 dlopen（NEEDED 扫不出来）；外加项目「运行时命令闭包」校验名单
+# （上游作者在真机 CANNOT LINK 事故后加的）。整体保留：体积很小，安全网价值更高。
 WHITELIST = {
     'libreadline.so.8', 'libhistory.so.8', 'libncursesw.so.6',
     'libncurses.so.6', 'libiconv.so', 'libpcre2-8.so',
@@ -89,103 +95,89 @@ def main() -> None:
             continue
         for f in os.listdir(base):
             p = os.path.join(base, f)
-            if os.path.isfile(p) and is_elf(p):     # isfile 跟随链接，链接也计入
+            if os.path.isfile(p) and is_elf(p):
                 elfs.append(p)
-    print(f'扫描 {len(elfs)} 个 ELF 文件…')
+    print(f'扫描 {len(elfs)} 个 ELF 文件…', flush=True)
     needed = needed_names(elfs)
     if not needed:
         sys.exit('致命：一个被需要的库名都没扫到（readelf 不可用？）—— 中止，绝不继续删')
     required = needed | WHITELIST
-    print(f'被 NEEDED 的名字 {len(needed)} 个，加上白名单共 {len(required)} 个')
+    print(f'被 NEEDED 的名字 {len(needed)} 个，加上白名单共 {len(required)} 个', flush=True)
 
-    # 分组：基名 -> [各形态文件名]
     groups = {}
     for f in sorted(os.listdir(libdir)):
         k = base_key(f)
         if k:
             groups.setdefault(k, []).append(f)
 
-    freed = renamed = copied = removed = 0
-    trace = {}                      # 基名 -> 决策记录（失败时打印，便于定位）
+    deleted, copied = [], []
     for k, forms in sorted(groups.items()):
-        if len(forms) < 2:
+        paths = {f: os.path.join(libdir, f) for f in forms}
+        # 1) 找一份真实内容
+        real = next((f for f in forms
+                     if not os.path.islink(paths[f]) and os.path.isfile(paths[f])), None)
+        if real is None:                      # 组内全是链接 → 解析到实际目标
+            for f in forms:
+                t = os.path.realpath(paths[f])
+                if os.path.isfile(t):
+                    real = t
+                    break
+        if real is None:
+            print(f'  跳过 {k}：组内没有可用的真实内容', flush=True)
             continue
-        # 组内被需要的名字（按 NEEDED 优先级：先精确名，再白名单）
+        real_path = real if os.path.isabs(real) else paths[real]
+
         want = [f for f in forms if f in required]
         if not want:
-            # 整组都没人要 → 全删
             for f in forms:
-                p = os.path.join(libdir, f)
-                if not os.path.lexists(p):
-                    continue
-                if os.path.isfile(p) and not os.path.islink(p):
-                    freed += os.path.getsize(p)
-                os.remove(p)
-                removed += 1
+                os.remove(paths[f])
+                deleted.append(f)
             continue
-        # 挑一个"真身"（优先非链接的文件）
-        real = next((f for f in forms if not os.path.islink(os.path.join(libdir, f))), None)
-        if real is None:
-            continue                      # 全是链接（异常形态），不动
-        # 保留名优先取「真正被 NEEDED 的」：白名单里的名字（如裸名 libz.so）
-        # 只是保险，不该抢走真身 —— 按字母序取第一个会让 libz.so 抢在
-        # libz.so.1 前面，把真身改名成裸名、而真正被需要的 libz.so.1 变成悬空链接。
-        keep = next((f for f in want if f in needed), want[0])
-        trace[k] = f'forms={forms} want={want} real={real} keep={keep}'
-        if real != keep:
-            os.rename(os.path.join(libdir, real), os.path.join(libdir, keep))
-            renamed += 1
-        # 其余被需要的名字 → 实体复制。注意要遍历**全部** want 而不是 want[1:] ——
-        # keep 未必是 want[0]（它优先取真正被 NEEDED 的名字），用切片会漏掉 want[0]，
-        # 那个名字既不会被复制也不会被删，最后留一个悬空链接（实测踩过）。
-        for extra in want:
-            if extra == keep:
+
+        # 每个被需要的名字都落成**实体文件**。
+        # 关键：即使它是符号链接、且指向的内容就是要留的那份，也要复制成实体 ——
+        # 因为打包用的 zip 会解引用链接，留着链接等于没省（这一点我第一版搞反了，
+        # 写了"realpath 相同就跳过"，结果所有别名都原样留着，省了 0 字节）。
+        for f in want:
+            p = paths[f]
+            if not os.path.islink(p) and os.path.isfile(p):
                 continue
-            p = os.path.join(libdir, extra)
-            # 必须用 lexists：悬空符号链接 os.path.exists() 为假，而直接 open(p,'wb')
-            # 会**写穿链接**去创建它的目标，链接本身仍是悬空（实测踩过）
+            tmp = p + '.trimtmp'
+            shutil.copy2(real_path, tmp)
             if os.path.lexists(p):
                 os.remove(p)
-            with open(os.path.join(libdir, keep), 'rb') as src, open(p, 'wb') as dst:
-                while True:
-                    chunk = src.read(1 << 20)
-                    if not chunk:
-                        break
-                    dst.write(chunk)
-            os.chmod(p, 0o755)
-            copied += 1
-        # 删掉组里其余所有形态（链接与多余实体）—— 改名过的原名已不存在，跳过
+            os.rename(tmp, p)
+            copied.append(f)
+
+        # 组内其余形态（含真身本身，如果它的名字不被需要）一律删除
         for f in forms:
-            if f in want or f == keep:
+            if f in want:
                 continue
-            p = os.path.join(libdir, f)
-            if not os.path.lexists(p):
-                continue
-            if os.path.isfile(p) and not os.path.islink(p):
-                freed += os.path.getsize(p)
-            os.remove(p)
-            removed += 1
+            p = paths[f]
+            if os.path.lexists(p):
+                os.remove(p)
+                deleted.append(f)
 
-    print(f'收敛完成：改名 {renamed}、复制 {copied}、删除 {removed}，释放 {freed/1048576:.1f} MB（未压缩）')
+    print(f'收敛：落地 {len(copied)}、删除 {len(deleted)}', flush=True)
+    if deleted:
+        print('  删除：' + ' '.join(deleted), flush=True)
 
-    # 收尾断言：所有被需要的名字都必须以实体文件存在（不是悬空链接）
-    missing = []
-    for n in sorted(required):
-        p = os.path.join(libdir, n)
-        if not os.path.exists(p) or not os.path.isfile(p):
-            missing.append(n)
-    # 系统库本来就不打包，不算问题
+    # 断言：required 里每个名字都必须是实体文件。
+    # 系统库（Android 自带）本来就不打包，不算问题。
     SYSTEM = {'libc.so', 'libm.so', 'libdl.so', 'liblog.so', 'libandroid.so',
-              'libandroid-spawn.so', 'libstdc++.so'}
-    missing = [m for m in missing if m not in SYSTEM]
-    if missing:
-        print('--- 各分组决策 ---')
-        for k, v in sorted(trace.items()):
-            print(f'  {k}: {v}')
-        print('--- lib/ 现有文件 ---')
-        print('  ' + ' '.join(sorted(os.listdir(libdir))))
-        sys.exit('致命：以下被需要的库在裁剪后不存在（构建中止）：\n  ' + '\n  '.join(missing))
-    print('校验通过：所有被需要的库名都以实体文件存在 ✓')
+              'libandroid-spawn.so', 'libstdc++.so', 'libcutils.so'}
+    bad = []
+    for n in sorted(required):
+        if n in SYSTEM:
+            continue
+        p = os.path.join(libdir, n)
+        if os.path.islink(p) or not os.path.isfile(p):
+            bad.append(n)
+    if bad:
+        print('--- lib/ 现状 ---', flush=True)
+        print('  ' + ' '.join(sorted(os.listdir(libdir))), flush=True)
+        sys.exit('致命：以下被需要的库不是实体文件（构建中止）：\n  ' + '\n  '.join(bad))
+    print('校验通过：所有被需要的库名都是实体文件 ✓', flush=True)
 
 
 if __name__ == '__main__':
