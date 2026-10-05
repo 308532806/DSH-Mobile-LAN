@@ -92,9 +92,11 @@ def main() -> None:
             if os.path.isfile(p) and is_elf(p):     # isfile 跟随链接，链接也计入
                 elfs.append(p)
     print(f'扫描 {len(elfs)} 个 ELF 文件…')
-    required = needed_names(elfs) | WHITELIST
-    if not any(needed_names(elfs)):
+    needed = needed_names(elfs)
+    if not needed:
         sys.exit('致命：一个被需要的库名都没扫到（readelf 不可用？）—— 中止，绝不继续删')
+    required = needed | WHITELIST
+    print(f'被 NEEDED 的名字 {len(needed)} 个，加上白名单共 {len(required)} 个')
 
     # 分组：基名 -> [各形态文件名]
     groups = {}
@@ -124,16 +126,23 @@ def main() -> None:
         real = next((f for f in forms if not os.path.islink(os.path.join(libdir, f))), None)
         if real is None:
             continue                      # 全是链接（异常形态），不动
-        keep = want[0]
+        # 保留名优先取「真正被 NEEDED 的」：白名单里的名字（如裸名 libz.so）
+        # 只是保险，不该抢走真身 —— 按字母序取第一个会让 libz.so 抢在
+        # libz.so.1 前面，把真身改名成裸名、而真正被需要的 libz.so.1 变成悬空链接。
+        keep = next((f for f in want if f in needed), want[0])
         if real != keep:
             os.rename(os.path.join(libdir, real), os.path.join(libdir, keep))
             renamed += 1
-        # 其余被需要的名字 → 复制（罕见）
-        for extra in want[1:]:
+        # 其余被需要的名字 → 实体复制。注意要遍历**全部** want 而不是 want[1:] ——
+        # keep 未必是 want[0]（它优先取真正被 NEEDED 的名字），用切片会漏掉 want[0]，
+        # 那个名字既不会被复制也不会被删，最后留一个悬空链接（实测踩过）。
+        for extra in want:
             if extra == keep:
                 continue
             p = os.path.join(libdir, extra)
-            if os.path.exists(p):
+            # 必须用 lexists：悬空符号链接 os.path.exists() 为假，而直接 open(p,'wb')
+            # 会**写穿链接**去创建它的目标，链接本身仍是悬空（实测踩过）
+            if os.path.lexists(p):
                 os.remove(p)
             with open(os.path.join(libdir, keep), 'rb') as src, open(p, 'wb') as dst:
                 while True:
