@@ -90,14 +90,32 @@ def main() -> None:
 
     before = {f for f in os.listdir(libdir) if os.path.isfile(os.path.join(libdir, f))}
 
+    # 符号链接（及其目标）必须原样保留：
+    #   · 链接本身是零成本，删了没意义；
+    #   · 更重要的是**不能删链接指向的目标** —— 删了链接就悬空，运行时直接 CANNOT LINK。
+    # CI 上就是这样：libreadline.so.8 是指向 .so.8.3 的符号链接，删掉目标后
+    # 闭包校验（test -e）立刻失败。本地产物里那些是解引用后的实体，所以本地看不出来。
+    symlinks = {f for f in os.listdir(libdir) if os.path.islink(os.path.join(libdir, f))}
+    protected = set()
+    for f in symlinks:
+        try:
+            protected.add(os.path.basename(os.path.realpath(os.path.join(libdir, f))))
+        except OSError:
+            pass
+    if symlinks:
+        print(f'发现 {len(symlinks)} 个符号链接，其目标一并保护：{sorted(protected)[:6]}')
+
     removed = kept = 0
     freed = 0
     deleted = []
     for f in sorted(os.listdir(libdir)):
         p = os.path.join(libdir, f)
+        if os.path.islink(p):          # 链接本身不动
+            kept += 1
+            continue
         if not os.path.isfile(p) or not is_elf(p):
             continue
-        if f in required or f in WHITELIST:
+        if f in required or f in WHITELIST or f in protected:
             kept += 1
             continue
         freed += os.path.getsize(p)
