@@ -126,8 +126,15 @@ object PluginInstaller {
                 return false
             }
             mode = "su"
-            val cmd = "rm -rf ${shq(dest.absolutePath)} && mkdir -p ${shq(dest.parentFile!!.absolutePath)} " +
-                "&& cp -r ${shq(staged.absolutePath)} ${shq(dest.absolutePath)}"
+            val uid = android.os.Process.myUid()
+            // 复制后必须把属主/权限改回 App：su 是以 root 跑的，复制出来的文件是
+            // root:root 0600 —— 引擎（root）读得到，但**App 自己连 stat 都做不了**，
+            // isInstalled() 就会误判"没装上"、覆盖层也就不加那一行（实测踩过）。
+            val cmd = "rm -rf ${shq(dest.absolutePath)}" +
+                " && mkdir -p ${shq(dest.parentFile!!.absolutePath)}" +
+                " && cp -r ${shq(staged.absolutePath)} ${shq(dest.absolutePath)}" +
+                " && chown -R $uid:$uid ${shq(dest.parentFile!!.absolutePath)}" +
+                " && chmod -R u+rwX ${shq(dest.parentFile!!.absolutePath)}"
             ok = runCatching { ProcessBuilder(su, "-c", cmd).start().waitFor() == 0 }
                 .getOrDefault(false)
         }
