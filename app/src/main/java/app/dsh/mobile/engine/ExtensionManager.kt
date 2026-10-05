@@ -63,6 +63,19 @@ class ExtensionManager(private val ctx: Context) {
         val bins: List<String>,
         val packages: List<String>,
         val iconRes: String = "",
+        /**
+         * 额外构件（非 Termux 仓库来源的文件，如 android.jar）。
+         * catalog 声明 url + sha256 + dest（扩展内相对路径），安装时下载并强校验，
+         * 与 deb 走同一条 SHA-256 校验链路。空 = 该扩展不需要额外构件。
+         */
+        val artifacts: List<Artifact> = emptyList(),
+    )
+
+    /** 额外构件：url 下载到扩展内 dest，sha256 强校验（非空时） */
+    data class Artifact(
+        val url: String,
+        val dest: String,
+        val sha256: String = "",
     )
 
     enum class ExtState { NOT_DOWNLOADED, DOWNLOADED, ACTIVATED }
@@ -75,6 +88,8 @@ class ExtensionManager(private val ctx: Context) {
         val sha256: String,
         val size: Long,
         val depends: List<String>,
+        /** 仓库声明的安装后体积（KB）；0 = 索引未提供。用于安装后体积核对 */
+        val installedSizeKb: Long = 0L,
     )
 
     /** 延后落地的链接（symlink/硬链接），rename 发布后在最终目录创建 */
@@ -256,6 +271,16 @@ class ExtensionManager(private val ctx: Context) {
                 bins = o.optJSONArray("bins")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList(),
                 packages = o.optJSONArray("packages")?.let { a -> (0 until a.length()).map { a.getString(it) } } ?: emptyList(),
                 iconRes = o.optString("iconRes", ""),
+                artifacts = o.optJSONArray("artifacts")?.let { a ->
+                    (0 until a.length()).map { i ->
+                        val ao = a.getJSONObject(i)
+                        Artifact(
+                            url = ao.getString("url"),
+                            dest = ao.getString("dest"),
+                            sha256 = ao.optString("sha256", ""),
+                        )
+                    }
+                } ?: emptyList(),
             )
         }
     }
@@ -394,6 +419,8 @@ class ExtensionManager(private val ctx: Context) {
         val debs: List<File>,
         val mainVersion: String,
         val cacheDir: File,
+        /** 闭包包元数据（含仓库声明的 Installed-Size，供安装后体积核对） */
+        val pkgs: List<RepoPkg> = emptyList(),
     )
 
     /** 阶段 1：仓库索引 → 依赖闭包 → 逐包 .deb 下载（SHA256 强校验）。
@@ -434,7 +461,7 @@ class ExtensionManager(private val ctx: Context) {
             done += p.size
             debs.add(f)
         }
-        return DownloadedDebs(debs, mainPkg.version, cacheDir)
+        return DownloadedDebs(debs, mainPkg.version, cacheDir, closure)
     }
 
     /** 阶段 2：解包 → 拍平 usr/ → 可执行位 → 版本标记 → rename 原子发布 → 链接落地。
@@ -468,6 +495,19 @@ class ExtensionManager(private val ctx: Context) {
                 Log.i(TAG, "extract ${ext.id}: ${deb.name} -> $n entries")
             }
             Log.i(TAG, "extract ${ext.id}: ${dl.debs.size} pkgs, $totalEntries entries total")
+
+            // 额外构件（catalog 的 artifacts）：Termux 仓库里没有、但对功能必需的文件
+            // （如 android-buildtools 的 android.jar）。下载到扩展内并做 SHA-256 强校验，
+            // 与 deb 走同一条校验链路；失败即整体失败（宁可报错，不产出"看着装好了但用不了"）。
+            if (ext.artifacts.isNotEmpty()) {
+                report(0.96f, "Downloading extra artifacts…")
+                ext.artifacts.forEach { art ->
+                    val dst = File(tmpDir, art.dest)
+                    dst.parentFile?.mkdirs()
+                    downloadArtifact(art, dst) { s2 -> report(null, s2) }
+                    Log.i(TAG, "artifact ${ext.id}: ${art.dest} (${dst.length()} bytes)")
+                }
+            }
             report(0.96f, "")
 
             // 拍平 usr/ 布局 → 可执行位 → 版本标记 → 原子发布
@@ -527,6 +567,22 @@ class ExtensionManager(private val ctx: Context) {
             } else if (missingBins.isNotEmpty()) {
                 Log.w(TAG, "extension ${ext.id}: missing bins $missingBins")
             }
+            // 体积核对（v1.2.51）：把实际占用与仓库声明的 Installed-Size 对比。
+            // 用户反馈"有些扩展装完比预期大很多"—— 根因是闭包里的每个包都带
+            // include/（C 头文件）与 share/（man/info/doc/licenses）等运行时无用内容。
+            // 这里只做**可见性**：正常/偏大都写进日志，偏差过大时告警，便于定位膨胀源。
+            runCatching {
+                val declaredKb = dl.pkgs.sumOf { it.installedSizeKb }   // 0 = 索引未提供
+                val actualKb = dirSizeKb(finalDir)
+                if (declaredKb > 0) {
+                    val ratio = actualKb.toDouble() / declaredKb
+                    val msg = "extension ${ext.id} size: actual=${actualKb / 1024}MB " +
+                        "declared=${declaredKb / 1024}MB (${(ratio * 100).toInt()}%)"
+                    if (ratio > 1.25) Log.w(TAG, msg + " — larger than declared; check include/share dirs")
+                    else Log.i(TAG, msg)
+                } else {
+                    Log.i(TAG, "extension ${ext.id} size: actual=${actualKb / 1024}MB (no declared size in index)")
+                }            }
             Log.i(TAG, "extension ${ext.id} installed v${dl.mainVersion} (${dl.debs.size} pkgs, $totalEntries entries)")
         } finally {
             dl.cacheDir.deleteRecursively()
@@ -585,7 +641,7 @@ class ExtensionManager(private val ctx: Context) {
         val out = HashMap<String, RepoPkg>(2048)
         text.split("\n\n").forEach { block ->
             var name = ""; var ver = ""; var fn = ""; var sha = ""
-            var size = 0L; var deps = emptyList<String>()
+            var size = 0L; var deps = emptyList<String>(); var installedKb = 0L
             block.lineSequence().forEach { line ->
                 if (line.isEmpty() || line[0] == ' ' || line[0] == '\t') return@forEach
                 val idx = line.indexOf(": ")
@@ -598,11 +654,12 @@ class ExtensionManager(private val ctx: Context) {
                     "Filename" -> fn = v
                     "SHA256" -> if (v.length == 64) sha = v
                     "Size" -> size = v.toLongOrNull() ?: 0L
+                    "Installed-Size" -> installedKb = v.toLongOrNull() ?: 0L
                     "Depends" -> deps = v.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                 }
             }
             if (name.isNotEmpty() && fn.isNotEmpty()) {
-                out[name] = RepoPkg(name, ver, fn, sha, size, deps)
+                out[name] = RepoPkg(name, ver, fn, sha, size, deps, installedKb)
             }
         }
         check(out.isNotEmpty()) { "Packages index parsed to nothing" }
@@ -763,6 +820,17 @@ class ExtensionManager(private val ctx: Context) {
             }
         }
         return entries
+    }
+
+    /** 目录实际占用（KB，按文件大小累加，跳过软链避免重复计数） */
+    private fun dirSizeKb(dir: File): Long {
+        var total = 0L
+        dir.walkTopDown().forEach { f ->
+            if (f.isFile && !java.nio.file.Files.isSymbolicLink(f.toPath())) {
+                total += f.length()
+            }
+        }
+        return total / 1024
     }
 
     /** 512 对齐 padding 计算与跳读见 skipPadAfter；GNU/PAX 头内容读取由 readBodyString 完成 */
@@ -927,13 +995,32 @@ class ExtensionManager(private val ctx: Context) {
                 if (java.nio.file.Files.isSymbolicLink(f.toPath())) return@forEach
                 val bytes = runCatching { f.readBytes() }.getOrNull() ?: return@forEach
                 if (bytes.size >= 4 && bytes[0] == 0x7F.toByte() && bytes[1] == 'E'.code.toByte()) return@forEach
-                val text = runCatching { String(bytes, StandardCharsets.UTF_8) }.getOrNull() ?: return@forEach
+                // ⚠️ 必须严格解码（v1.2.51 修复）：String(bytes, UTF_8) 对非法字节**不抛异常**，
+                // 而是静默替换成 U+FFFD，随后 writeText 把每个 U+FFFD 编成 3 字节写回
+                // → 文件被撑大且内容损坏（实测：49 字节的含非法字节文件涨到 85 字节，
+                // 1.73 倍）。这是"扩展装完比预期大"的真实原因之一（非 UTF-8 编码的
+                // 脚本/数据文件都会中招）。改用严格解码：非法即跳过该文件（不改写，
+                // 保持原样），避免"为了改路径而损坏文件"。
+                val text = decodeStrictUtf8(bytes) ?: return@forEach
                 if (!text.contains(termuxPrefix)) return@forEach
                 runCatching {
                     f.writeText(text.replace(termuxPrefix, extRoot), StandardCharsets.UTF_8)
                 }
             }
     }
+
+    /**
+     * 严格 UTF-8 解码：非法字节序列返回 null（调用方跳过该文件）。
+     *
+     * 与 `String(bytes, UTF_8)` 的关键区别：后者用 REPLACE 策略静默吞掉非法字节，
+     * 写回时把每个替换字符编成 3 字节，导致文件膨胀且内容损坏。
+     */
+    private fun decodeStrictUtf8(bytes: ByteArray): String? = runCatching {
+        val decoder = StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+        decoder.decode(java.nio.ByteBuffer.wrap(bytes)).toString()
+    }.getOrNull()
 
     private fun restoreExecBits(root: File) {
         listOf("bin", "usr/bin", "libexec").forEach { rel ->
@@ -966,7 +1053,10 @@ class ExtensionManager(private val ctx: Context) {
             }
             if (!first.startsWith("#!$badPrefix")) return@forEach
             val fixed = first.replaceFirst("#!$badPrefix", "#!${finalDir.absolutePath}/bin/")
-            val body = f.readText(StandardCharsets.UTF_8).substringAfter('\n')
+            // 严格解码：文件体含非法 UTF-8 时放弃改写（避免"为改 shebang 而损坏文件"）
+            val full = decodeStrictUtf8(runCatching { f.readBytes() }.getOrNull() ?: return@forEach)
+                ?: return@forEach
+            val body = full.substringAfter('\n')
             f.writeText("$fixed\n$body", StandardCharsets.UTF_8)
         }
     }
@@ -1062,7 +1152,10 @@ class ExtensionManager(private val ctx: Context) {
                 else -> localEnvPrefix + prog                               // 走 <bin>/env（PATH 查找兜底）
             }
             if (newShebang != first) {
-                val body = f.readText(StandardCharsets.UTF_8).substringAfter('\n')
+                // 严格解码：文件体含非法 UTF-8 时放弃改写（避免"为改 shebang 而损坏文件"）
+                val full = decodeStrictUtf8(runCatching { f.readBytes() }.getOrNull() ?: return@forEach)
+                    ?: return@forEach
+                val body = full.substringAfter('\n')
                 f.writeText("$newShebang\n$body", StandardCharsets.UTF_8)
             }
         }
@@ -1197,6 +1290,23 @@ class ExtensionManager(private val ctx: Context) {
                 }
             }
         }
+    }
+
+    /**
+     * 下载 catalog 声明的额外构件并做 SHA-256 强校验。
+     * 与 deb 下载共用 failover 思路：单 URL（artifacts 由 catalog 指定，不做镜像切换），
+     * 但校验失败一律抛错 —— 构件损坏会直接导致编译链路不可用，静默通过代价太大。
+     */
+    private fun downloadArtifact(art: Artifact, dst: File, onStage: (String) -> Unit) {
+        onStage("Downloading ${dst.name}…")
+        downloadTo(art.url, dst) { /* 构件通常较小，不报细粒度进度 */ }
+        if (art.sha256.isNotEmpty()) {
+            val actual = RuntimeInstaller.sha256(dst)
+            check(actual.equals(art.sha256, ignoreCase = true)) {
+                "Artifact checksum mismatch: ${dst.name} (expected ${art.sha256.take(12)}…, got ${actual.take(12)}…)"
+            }
+        }
+        check(dst.length() > 0) { "Artifact is empty: ${dst.name}" }
     }
 
     // ================= 流小工具 =================

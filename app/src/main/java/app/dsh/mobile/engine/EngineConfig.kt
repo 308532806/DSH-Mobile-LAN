@@ -66,18 +66,82 @@ object EngineConfig {
      */
     fun ensureAndroidOverlay(ctx: android.content.Context): File {
         val f = File(engineRoot(ctx), "android-overlay.yml")
+        // NOTE: keep this file free of CJK text — the i18n gate scans Kotlin string
+        // literals and would flag it (explanations live in the Kotlin comments below).
+        //
+        // Why all three rows are pinned here instead of relying on DSH_PERMISSION_MODE
+        // alone: permission-presets derives its default from the *composed* pair
+        // (sandbox mode + approval policy) and throws "composed sandbox and approval
+        // defaults match no preset" when the pair names no table entry. A partially
+        // applied permission stack (e.g. sandbox resolved but approval left at the
+        // schema default 'ask') yields exactly {danger-full-access, ask} — which is
+        // not in the table — and the entry then fails to activate on every boot.
+        // Pinning the trio makes the composed pair match by construction.
+        //
+        // ⚠️ A patch REPLACES the targeted row's whole `config` (applyEntryPatches
+        // does `target[key] = value`), so each row below restates every key it owns:
+        //   · permission needs the full presets table — the plugin's own schema
+        //     default only carries workspace-write + danger-full-access, and losing
+        //     `read-only` would remove a preset the WebUI offers.
+        //   · sandbox-policy needs workspaceRoot (schema marks it required).
         val body = """
             |# [dsh-android] Android compatibility overlay (auto-generated, do not edit)
-            |# Sandbox backends (landlock/seatbelt) do not exist on Android, and the default
-            |# read-only mode would make the AI's shell tool refuse to run any command;
-            |# the security boundary is enforced by the app's permission mode (Normal/Shizuku/Root).
-            |- id: sandbox-policy
+            |# Sandbox backends (landlock/seatbelt) do not exist on Android, and any
+            |# confined mode would make the AI's shell tool refuse to run every command
+            |# ("no sandbox backend usable on host"). The security boundary is the app's
+            |# permission mode (Normal/Shizuku/Root) plus the su gate, not an engine-side
+            |# sandbox. The user can still pick a stricter per-session preset in the WebUI.
+            |#
+            |# DSH_PERMISSION_MODE=danger-full-access is also exported (see buildEnv) so the
+            |# upstream expressions agree with this layer; these rows are the authority.            |- id: sandbox-policy
             |  config:
             |    mode: danger-full-access
+            |    workspaceRoot: !!js process.cwd()
+            |
+            |- id: approval
+            |  config:
+            |    policy: never
+            |
+            |- id: permission
+            |  config:
+            |    defaultPreset: danger-full-access
+            |    presets:
+            |      read-only:
+            |        sandbox: read-only
+            |        approval: ask
+            |        name: read-only
+            |        description: Read-only file access; every write requires approval.
+            |      workspace-write:
+            |        sandbox: workspace-write
+            |        approval: ask
+            |        name: workspace-write
+            |        description: Write inside the workspace and permitted temporary directories; wider retries require approval.
+            |      danger-full-access:
+            |        sandbox: danger-full-access
+            |        approval: never
+            |        name: danger-full-access
+            |        description: Full file access without approval prompts.
+            |
+            |# Registers DSH_ANDROID_PRIV_MODE as a managed shell variable. The value
+            |# cannot arrive by process inheritance: shell-env rebuilds the DSH_*
+            |# namespace per shell call and injects only registered contributions.
+            |# A relative name is resolved against this overlay's directory.
+            |- insert:
+            |    - id: android-priv-mode
+            |      name: ./android-plugins/priv-mode.mjs
             |""".trimMargin()
         runCatching {
             if (!f.isFile || f.readText() != body) f.writeText(body)
         }
+        // The overlay references the plugin by relative path, so the plugin file must
+        // sit beside it. Deploy from assets (kept in sync by the same idempotent check).
+        runCatching {
+            val src = ctx.assets.open("android-plugins/priv-mode.mjs").use { it.readBytes() }
+            val dst = File(f.parentFile, "android-plugins/priv-mode.mjs")
+            dst.parentFile?.mkdirs()
+            val text = src.toString(Charsets.UTF_8)
+            if (!dst.isFile || dst.readText() != text) dst.writeText(text)
+        }.onFailure { Log.w(TAG, "priv-mode plugin deploy failed: ${it.message}") }
         return f
     }
 
@@ -104,7 +168,7 @@ object EngineConfig {
         applyShzGate(root, privMode, port)
         // v1.1.0：notify/scr 包装器（所有模式可用——通知与无障碍是 App 自身能力，
         // 经 AgentBridge 127.0.0.1:3083 转发）。
-        applyAgentGates(root)
+        applyAgentGates(ctx, root)
         // v1.2.0 扩展环境：已激活扩展的 bin/lib 并入 PATH/LD_LIBRARY_PATH
         // （顺序：engine 自带 → 扩展 → 系统，保证 su/notify/scr 闸门优先级不被扩展覆盖）
         val extRoots = ExtensionManager.activeRoots(ctx)
@@ -132,7 +196,23 @@ object EngineConfig {
             "TMPDIR=${tmpDir(ctx)}",
             "PORT=$port",
             "NODE_ENV=production",
-            "DSH_ANDROID_PRIV_MODE=${privMode.name}",
+            // 取值统一小写（normal/shizuku/root），与 AGENTS 种子里 AI 读到的文档一致。
+            // 此前注入 .name（ROOT）、种子写 lowercase（root）→ AI 按文档写
+            // `[ "$DSH_ANDROID_PRIV_MODE" = "root" ]` 永远不成立，静默走错分支。
+            "DSH_ANDROID_PRIV_MODE=${privMode.name.lowercase()}",
+            // Android 标准环境（init 对普通进程的设定）。aapt / apksigner / zipalign 靠它
+            // 判断"是否运行在 Android 上"，缺失时直接报 "ANDROID_DATA not set" 并退出
+            // （扩展中心主推 android-buildtools，AI 又被种子引导使用这些工具 → 开箱即坏）。
+            // 引擎进程环境会被所有子 shell 与扩展二进制继承，一处修复全局生效。
+            "ANDROID_DATA=/data",
+            "ANDROID_ROOT=/system",
+            "ANDROID_STORAGE=/storage",
+            // 权限三件套的单一驱动源（v1.2.52）：上游 dsh-base 用这一个变量同时决定
+            // sandbox-policy.mode、approval.policy 与默认预设，保证三者组合一致。
+            // Android 没有 landlock/seatbelt，任何受限模式都会让 shell 工具拒绝执行
+            // （"no sandbox backend usable on host"），故固定 danger-full-access；
+            // 真实安全边界是 App 的权限模式（Normal/Shizuku/Root）与 su 闸门。
+            "DSH_PERMISSION_MODE=danger-full-access",
         )
         // 局域网访问（LAN 模式）：这是本项目唯一的监听面开关。
         // 打开时引擎的 webserver 行会绑定 0.0.0.0（见 scripts/patch-lan-access.py），
@@ -167,6 +247,30 @@ object EngineConfig {
         if (rubyLibs.isNotEmpty()) env.add("RUBYLIB=" + rubyLibs.joinToString(":"))
         // git：编译期硬编码的系统级 gitconfig 指向 Termux 前缀 → 跳过（实测修复 git init）
         env.add("GIT_CONFIG_NOSYSTEM=1")
+        // git 子命令查找路径（2026-10-05，Issue 反馈"git-remote-https 找不到"的根因）：
+        // git 找 git-<cmd> 不靠 PATH，而靠编译期写死的 GIT_EXEC_PATH。Termux 包把它指向
+        // /data/data/com.termux/files/usr/libexec/git-core —— 扩展装到别处后该目录不存在，
+        // 于是 git-remote-https/http、git-upload-pack 等全部找不到（ELF 二进制内的路径
+        // rewriteTermuxPaths 明确跳过，改不了）。GIT_EXEC_PATH 是官方支持的重定位机制
+        // （git 文档 --exec-path："can also be controlled by setting the GIT_EXEC_PATH
+        // environment variable"），一处注入即修复全部子命令。
+        extRoots.firstOrNull { it.name == "git" }?.let { ext ->
+            File(ext, "libexec/git-core").takeIf { it.isDirectory }?.let {
+                env += "GIT_EXEC_PATH=${it.absolutePath}"
+            }
+            // 模板与系统配置同样硬编码 Termux 前缀：缺模板时 git init/clone 会告警或行为异常
+            File(ext, "share/git-core/templates").takeIf { it.isDirectory }?.let {
+                env += "GIT_TEMPLATE_DIR=${it.absolutePath}"
+            }
+            // 证书：git 经 libcurl 走 HTTPS，Termux 的 libcurl 编译期指向 Termux 证书路径。
+            // 扩展闭包含 ca-certificates（git → openssl → ca-certificates），指向实装位置即可
+            // （引擎侧 cert.pem 只在 runtime 根，扩展不共享）
+            listOf("etc/tls/cert.pem", "etc/ssl/certs/ca-certificates.crt", "etc/ca-certificates.crt")
+                .map { File(ext, it) }.firstOrNull { it.isFile }?.let {
+                    env += "GIT_SSL_CAINFO=${it.absolutePath}"
+                    env += "CURL_CA_BUNDLE=${it.absolutePath}"
+                }
+        }
         // ImageMagick：内置配置路径指向 Termux 前缀 → colors.xml 找不到，每次运行刷
         // "UnableToOpenConfigureFile `colors.xml'" 警告（Agent 实测：加此变量即干净 ✓）
         extRoots.firstOrNull { it.name == "imagemagick" }?.let { ext ->
@@ -178,6 +282,16 @@ object EngineConfig {
         // ⚠️ 只认扩展 id=python：imagemagick/lib 里是完整 stdlib 副本（连 os.py 都有，
         // 目录名/os.py 判据全被骗——PYTHONHOME 错指 imagemagick 实测事故）
         extRoots.firstOrNull { it.name == "python" }?.let { env += "PYTHONHOME=$it" }
+        // 包管理器镜像（2026-10-05，Issue 反馈"pnpm 连不上 GitHub"）：
+        // runtime 内没有任何 .npmrc，corepack/npm 默认走 registry.npmjs.org —— 国内直连常
+        // 超时或被重置。三个变量覆盖三条路径，缺一不可：
+        //   · COREPACK_NPM_REGISTRY —— corepack 拉取 pnpm/yarn 本体（corepack.cjs 内读取）
+        //   · npm_config_registry    —— npm / pnpm 自身的包解析（小写环境变量是 npm 的规范形式）
+        //   · NPM_CONFIG_REGISTRY    —— 大写别名，部分工具只认大写
+        // 用户可通过设置里已导出的同名环境变量覆盖（种子文档也据此告诉 AI 如何换源）。
+        listOf("COREPACK_NPM_REGISTRY", "npm_config_registry", "NPM_CONFIG_REGISTRY")
+            .filterNot { System.getenv(it)?.isNotBlank() == true }
+            .forEach { env += "$it=$NPM_REGISTRY_MIRROR" }
         // 编译工具链支持（AI 交叉编译清单实测）：
         // - GOTMPDIR：Termux go 的临时目录回退硬编码 /data/data/com.termux（不存在）→ 显式指到引擎 tmp
         // - LIBRARY_PATH：链接期库搜索（rust-lld/clang 的 -lunwind 等命中扩展 lib）
@@ -279,178 +393,76 @@ object EngineConfig {
      *  - scr tap <x> <y>         → POST /tap 坐标点击
      *  - scr tap-text <文本>     → POST /tap 按文本点击（无障碍服务开启才可用）
      */
-    private fun applyAgentGates(root: File) {
+    private fun applyAgentGates(ctx: android.content.Context, root: File) {
         val bindir = File(root, "bin").apply { mkdirs() }
         try {
-            val notify = File(bindir, "notify")
-            notify.writeText("#!/system/bin/sh\n" +
-                "# [dsh-android] notify: push an Android system notification (task done).\n" +
-                "msg=\"${'$'}*\"\n" +
-                "exec \"${'$'}(dirname \"${'$'}0\")/node\" -e '\n" +
-                "  const body = JSON.stringify({ title: \"Agent Task\", body: process.argv[1] || \"Task complete\" });\n" +
-                "  fetch(\"http://127.0.0.1:3083/notify\", { method: \"POST\", headers: {\"content-type\":\"application/json\"}, body })\n" +
-                "    .then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(2));\n" +
-                "' \"${'$'}msg\"\n")
-            notify.setExecutable(true, false)
-
-            val scr = File(bindir, "scr")
-            scr.writeText("#!/system/bin/sh\n" +
-                "# [dsh-android] scr: screen see & control via the accessibility service.\n" +
-                "#   dump | xml | shot | tap <x> <y> | tap-text <t> | tap-desc <d>\n" +
-                "#   swipe <x1> <y1> <x2> <y2> [ms] | key <back|home|recents> | wait <t> [gone] [ms]\n" +
-                "case \"${'$'}1\" in\n" +
-                "  dump)\n" +
-                "    exec \"${'$'}(dirname \"${'$'}0\")/node\" -e '\n" +
-                "      fetch(\"http://127.0.0.1:3083/screen\").then(r => r.text()).then(t => { console.log(t); })\n" +
-                "        .catch(e => { console.error(\"scr: \" + e.message); process.exit(2); });\n" +
-                "    ' ;;\n" +
-                "  xml)\n" +
-                "    exec \"${'$'}(dirname \"${'$'}0\")/node\" -e '\n" +
-                "      fetch(\"http://127.0.0.1:3083/screen?xml=1\").then(r => r.text()).then(t => { console.log(t); })\n" +
-                "        .catch(e => { console.error(\"scr: \" + e.message); process.exit(2); });\n" +
-                "    ' ;;\n" +
-                "  shot)\n" +
-                "    exec \"${'$'}(dirname \"${'$'}0\")/node\" -e '\n" +
-                "      fetch(\"http://127.0.0.1:3083/screenshot\").then(r => r.text()).then(t => { console.log(t); try { const j = JSON.parse(t); process.exit(j.ok ? 0 : 4); } catch (e2) { process.exit(2); } })\n" +
-                "        .catch(e => { console.error(\"scr: \" + e.message); process.exit(2); });\n" +
-                "    ' ;;\n" +
-                "  tap)\n" +
-                "    exec \"${'$'}(dirname \"${'$'}0\")/node\" -e '\n" +
-                "      const body = JSON.stringify({ x: Number(process.argv[1]), y: Number(process.argv[2]) });\n" +
-                "      fetch(\"http://127.0.0.1:3083/tap\", { method: \"POST\", headers: {\"content-type\":\"application/json\"}, body })\n" +
-                "        .then(r => { console.log(r.ok ? \"tapped\" : \"tap failed\"); process.exit(r.ok ? 0 : 1); })\n" +
-                "        .catch(e => { console.error(\"scr: \" + e.message); process.exit(2); });\n" +
-                "    ' -- \"${'$'}2\" \"${'$'}3\" ;;\n" +
-                "  tap-text)\n" +
-                "    exec \"${'$'}(dirname \"${'$'}0\")/node\" -e '\n" +
-                "      const body = JSON.stringify({ text: process.argv[1] });\n" +
-                "      fetch(\"http://127.0.0.1:3083/tap\", { method: \"POST\", headers: {\"content-type\":\"application/json\"}, body })\n" +
-                "        .then(r => { console.log(r.ok ? \"tapped\" : \"text not found\"); process.exit(r.ok ? 0 : 1); })\n" +
-                "        .catch(e => { console.error(\"scr: \" + e.message); process.exit(2); });\n" +
-                "    ' -- \"${'$'}2\" ;;\n" +
-                "  tap-desc)\n" +
-                "    exec \"${'$'}(dirname \"${'$'}0\")/node\" -e '\n" +
-                "      const body = JSON.stringify({ desc: process.argv[1] });\n" +
-                "      fetch(\"http://127.0.0.1:3083/tap\", { method: \"POST\", headers: {\"content-type\":\"application/json\"}, body })\n" +
-                "        .then(r => { console.log(r.ok ? \"tapped\" : \"desc not found\"); process.exit(r.ok ? 0 : 1); })\n" +
-                "        .catch(e => { console.error(\"scr: \" + e.message); process.exit(2); });\n" +
-                "    ' -- \"${'$'}2\" ;;\n" +
-                "  swipe)\n" +
-                "    exec \"${'$'}(dirname \"${'$'}0\")/node\" -e '\n" +
-                "      const body = JSON.stringify({ type: \"swipe\", x1: Number(process.argv[1]), y1: Number(process.argv[2]), x2: Number(process.argv[3]), y2: Number(process.argv[4]), durationMs: Number(process.argv[5] || 300) });\n" +
-                "      fetch(\"http://127.0.0.1:3083/gesture\", { method: \"POST\", headers: {\"content-type\":\"application/json\"}, body })\n" +
-                "        .then(r => { console.log(r.ok ? \"swiped\" : \"swipe failed\"); process.exit(r.ok ? 0 : 3); })\n" +
-                "        .catch(e => { console.error(\"scr: \" + e.message); process.exit(2); });\n" +
-                "    ' -- \"${'$'}2\" \"${'$'}3\" \"${'$'}4\" \"${'$'}5\" \"${'$'}6\" ;;\n" +
-                "  key)\n" +
-                "    exec \"${'$'}(dirname \"${'$'}0\")/node\" -e '\n" +
-                "      const body = JSON.stringify({ action: process.argv[1] });\n" +
-                "      fetch(\"http://127.0.0.1:3083/key\", { method: \"POST\", headers: {\"content-type\":\"application/json\"}, body })\n" +
-                "        .then(r => { console.log(r.ok ? \"done\" : \"unknown action\"); process.exit(r.ok ? 0 : 1); })\n" +
-                "        .catch(e => { console.error(\"scr: \" + e.message); process.exit(2); });\n" +
-                "    ' -- \"${'$'}2\" ;;\n" +
-                "  wait)\n" +
-                "    exec \"${'$'}(dirname \"${'$'}0\")/node\" -e '\n" +
-                "      const body = JSON.stringify({ text: process.argv[1], gone: process.argv[2] === \"gone\", timeoutMs: Number(process.argv[3] || 5000) });\n" +
-                "      fetch(\"http://127.0.0.1:3083/wait\", { method: \"POST\", headers: {\"content-type\":\"application/json\"}, body })\n" +
-                "        .then(r => { console.log(r.ok ? \"condition met\" : \"timeout\"); process.exit(r.ok ? 0 : 1); })\n" +
-                "        .catch(e => { console.error(\"scr: \" + e.message); process.exit(2); });\n" +
-                "    ' -- \"${'$'}2\" \"${'$'}3\" \"${'$'}4\" ;;\n" +
-                "  *) echo \"usage: scr dump|xml|shot|tap <x> <y>|tap-text <t>|tap-desc <d>|swipe <x1> <y1> <x2> <y2> [ms]|key <back|home|recents>|wait <t> [gone] [ms]\" >&2; exit 2 ;;\n" +
-                "esac\n")
-            scr.setExecutable(true, false)
-
-            // v1.2.19：curl v2 —— 覆盖 runtime.zip 内置版（PATH 首位 engine/bin 优先）。
-            // 修二进制下载损坏（r.text() UTF-8 重编码 → arrayBuffer 原始字节落盘），
-            // 补 -sS/-v/-I/--json/-L 兼容；参数解析在 sh、body 只经 env 传递
-            val curl = File(bindir, "curl")
-            curl.writeText("#!/system/bin/sh\n" +
-                "# [dsh-android] curl v2: binary-safe wrapper. -s -sS -v -I --json -L -X -H* -d -o --max-time\n" +
-                "URL=\"\"; OUT=\"\"; METHOD=\"\"; DATA=\"\"; SILENT=0; HEAD=0; JSON=0; HDRS=\"\"\n" +
-                "while [ ${'$'}# -gt 0 ]; do\n" +
-                "  case \"${'$'}1\" in\n" +
-                "    -s|--silent) SILENT=1 ;;\n" +
-                "    -sS|-SS) SILENT=1 ;;\n" +
-                "    -v|--verbose) ;;\n" +
-                "    -I|--head) HEAD=1 ;;\n" +
-                "    --json) JSON=1 ;;\n" +
-                "    -L|--location) ;;\n" +
-                "    -X|--request) METHOD=\"${'$'}2\"; shift ;;\n" +
-                "    -H|--header) HDRS=\"${'$'}HDRS${'$'}2\\n\"; shift ;;\n" +
-                "    -d|--data|--data-raw) DATA=\"${'$'}2\"; [ -z \"${'$'}METHOD\" ] && METHOD=POST; shift ;;\n" +
-                "    -o|--output) OUT=\"${'$'}2\"; shift ;;\n" +
-                "    --max-time|-m) shift ;;\n" +
-                "    -*) ;;\n" +
-                "    *) URL=\"${'$'}1\" ;;\n" +
-                "  esac\n" +
-                "  shift\n" +
-                "done\n" +
-                "[ -z \"${'$'}URL\" ] && { echo \"curl: no URL\" >&2; exit 2; }\n" +
-                "CURLV2_H=\"${'$'}HDRS\" exec \"${'$'}(dirname \"${'$'}0\")/node\" -e '\n" +
-                "(async () => {\n" +
-                "  const [url, out, method, data, silent, head] = process.argv.slice(1);\n" +
-                "  const hs = {};\n" +
-                "  (process.env.CURLV2_H || \"\").split(\"\\n\").filter(Boolean).forEach(h => {\n" +
-                "    const i = h.indexOf(\":\");\n" +
-                "    if (i > 0) hs[h.slice(0, i).trim().toLowerCase()] = h.slice(i + 1).trim();\n" +
-                "  });\n" +
-                "  if (process.argv[8] === \"1\") { hs[\"content-type\"] = \"application/json\"; hs[\"accept\"] = \"application/json\"; }\n" +
-                "  const r = await fetch(url, { method: method || (data ? \"POST\" : (head === \"1\" ? \"HEAD\" : \"GET\")), headers: hs, body: data || undefined, redirect: \"follow\" });\n" +
-                "  if (silent !== \"1\") console.error(r.status + \" \" + (r.statusText || \"\"));\n" +
-                "  if (out) {\n" +
-                "    const buf = Buffer.from(await r.arrayBuffer());\n" +
-                "    require(\"fs\").writeFileSync(out, buf);\n" +
-                "    if (silent !== \"1\") console.log(\"saved \" + buf.length + \" bytes -> \" + out);\n" +
-                "    process.exit(r.ok ? 0 : 22);\n" +
-                "  }\n" +
-                "  const t = await r.text();\n" +
-                "  process.stdout.write(t);\n" +
-                "  process.exit(r.ok ? 0 : 22);\n" +
-                "})().catch(e => { console.error(\"curl: \" + e.message); process.exit(7); });\n" +
-                "' -- \"${'$'}URL\" \"${'$'}OUT\" \"${'$'}METHOD\" \"${'$'}DATA\" \"${'$'}SILENT\" \"${'$'}HEAD\" \"${'$'}JSON\"\n")
-            curl.setExecutable(true, false)
-
-            // v1.2.19：psx/killx —— 按进程名（comm）匹配，杜绝 pkill -f 的自匹配误杀
-            //（自己的 bash -c / node -e 命令行含目标串 → SIGKILL 自己的实测坑）
-            val psx = File(bindir, "psx")
-            psx.writeText("#!/system/bin/sh\n" +
-                "# [dsh-android] psx: list processes matching by command NAME (comm) only.\n" +
-                "# Never matches the full command line, so it can not kill/match itself.\n" +
-                "[ -z \"${'$'}1\" ] && { echo \"usage: psx <comm-pattern>\" >&2; exit 2; }\n" +
-                "ps -A -o pid,comm | grep -i -- \"${'$'}1\" | grep -v grep\n")
-            psx.setExecutable(true, false)
-
-            val killx = File(bindir, "killx")
-            killx.writeText("#!/system/bin/sh\n" +
-                "# [dsh-android] killx: kill by command NAME (comm) match, self-safe.\n" +
-                "# usage: killx <comm-pattern>\n" +
-                "[ -z \"${'$'}1\" ] && { echo \"usage: killx <comm-pattern>\" >&2; exit 2; }\n" +
-                "me=${'$'}${'$'}\n" +
-                "ps -A -o pid,comm | grep -i -- \"${'$'}1\" | grep -v grep | while read pid comm; do\n" +
-                "  [ \"${'$'}pid\" != \"${'$'}me\" ] && kill \"${'$'}pid\" 2>/dev/null && echo \"killed ${'$'}pid ${'$'}comm\"\n" +
-                "done\n")
-            killx.setExecutable(true, false)
-
-            // v1.2.26：say —— Agent 语音输出（系统 TTS，离线免费，issues #2 语音方向）
-            val say = File(bindir, "say")
-            say.writeText("#!/system/bin/sh\n" +
-                "# [dsh-android] say: speak text aloud via system TTS (agent voice output).\n" +
-                "# usage: say [-f] <text>   (-f = interrupt current speech)\n" +
-                "FLUSH=0\n" +
-                "case \"${'$'}1\" in -f|--flush) FLUSH=1; shift ;; esac\n" +
-                "TEXT=\"${'$'}*\"\n" +
-                "exec \"${'$'}(dirname \"${'$'}0\")/node\" -e '\n" +
-                "  const body = JSON.stringify({ text: process.argv[1] || \"\", flush: process.argv[2] === \"1\" });\n" +
-                "  fetch(\"http://127.0.0.1:3083/say\", { method: \"POST\", headers: {\"content-type\":\"application/json\"}, body })\n" +
-                "    .then(r => r.text()).then(t => console.log(t)).catch(e => { console.error(\"say: \" + e.message); process.exit(2); });\n" +
-                "' -- \"${'$'}TEXT\" \"${'$'}FLUSH\"\n")
-            say.setExecutable(true, false)
-
-            Log.i(TAG, "agent gates: notify/scr/curl/psx/killx wrappers injected (bridge :3083)")
+            // ── 门脚本：从 assets/gates 部署（v1.2.50）─────────────────────────
+            // 此前 notify/scr/say 内嵌在 Kotlin 字符串里，每次调用 `exec node -e fetch`
+            // 都要冷启一个 Node（实测 ~150ms/次 + 数十 MB 峰值内存；内存高水位时
+            // scr dump 挂 >60s）。现改为 assets 里的纯 bash 脚本（配 _dsh_http.sh
+            // 共享 HTTP 客户端），零 Node 冷启 + 内建超时。
+            // 放在 assets 而非 Kotlin 字符串：避免 bash/Kotlin 双层转义（易错且难维护）。
+            // 门脚本 shebang 用 #!@DSH_BASH@ 占位符：部署时替换为引擎 bash 的实际路径。
+            // 必须用 bash（/dev/tcp 是 bash 特性；/system/bin/sh 是 toybox，不支持）。
+            val bashPath = File(root, "bin/bash").absolutePath
+            val libDir = File(root, "lib").absolutePath
+            val broken = mutableListOf<String>()
+            // psx/killx（v1.2.52 恢复）：v1.2.50 把门脚本从 Kotlin 字符串搬到 assets 时
+            // 漏掉了这两个，但种子仍在教 agent 使用 → agent 照着调用得到 command not found
+            // （Agent 审计 N8 实测）。它们解决的是真问题：agent 常以 `bash -c '... pkill -f X'`
+            // 形式执行，完整命令行含 pattern 会命中自己并自杀，必须按 comm 匹配。
+            listOf("_dsh_http.sh", "notify", "scr", "say", "psx", "killx").forEach { name ->
+                val dst = File(bindir, name)
+                runCatching {
+                    val text = ctx.assets.open("gates/$name").use { it.readBytes().toString(Charsets.UTF_8) }
+                    // ⚠️ CRLF 剥离（v1.2.52 事故）：门脚本曾被以 CRLF 打进 APK，
+                    // 首行变成 `#!/system/bin/sh\r` → 内核按字面找解释器，报
+                    // "bad interpreter: No such file or directory"（误导性地像文件丢失）。
+                    // 三个门脚本 100% 失效，而 notify/scr/say 是种子要求 agent 必用的能力。
+                    // 根因是工作区文件在 .gitattributes 生效前就已以 CRLF 检出；此处
+                    // 无条件剥离，作为不依赖构建环境行尾的兜底防线。
+                    val normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+                    dst.writeText(
+                        normalized.replace("@DSH_BASH@", bashPath).replace("@DSH_LIBDIR@", libDir),
+                    )
+                }.onFailure { Log.w(TAG, "agent gate $name deploy failed: ${it.message}") }
+            }
+            listOf("notify", "scr", "say", "psx", "killx").forEach { File(bindir, it).setExecutable(true, false) }
+            File(bindir, "_dsh_http.sh").setReadable(true, false)
+            // 部署后自检（v1.2.52）：逐个校验首行不含 \r 且指向存在的解释器。
+            // 失败不静默——写进 engine.log 并给出明确原因，避免"看起来像文件丢了"的误判。
+            listOf("_dsh_http.sh", "notify", "scr", "say", "psx", "killx").forEach { name ->
+                val f = File(bindir, name)
+                val head = runCatching {
+                    f.inputStream().use { ins ->
+                        val buf = ByteArray(128)
+                        val n = ins.read(buf)
+                        String(buf, 0, maxOf(n, 0), Charsets.UTF_8).lineSequence().first()
+                    }
+                }.getOrNull().orEmpty()
+                when {
+                    !f.isFile -> broken += "$name (missing)"
+                    head.contains('\r') -> broken += "$name (CRLF in shebang: ${head.take(30)})"
+                    head.startsWith("#!") && !File(head.removePrefix("#!").trim()).isFile ->
+                        broken += "$name (interpreter missing: ${head.removePrefix("#!").trim()})"
+                }
+            }
+            if (broken.isNotEmpty()) {
+                Log.w(TAG, "agent gates BROKEN: ${broken.joinToString("; ")}")
+            } else {
+                Log.i(TAG, "agent gates: notify/scr/say/_dsh_http.sh deployed (bridge :3083)")
+            }
         } catch (e: Exception) {
             Log.w(TAG, "agent gates: ${e.message}")
         }
     }
 
     private const val TAG = "EngineConfig"
+
+    /**
+     * npm 生态默认镜像。corepack / npm / pnpm 在 runtime 内无任何 .npmrc，
+     * 默认 registry.npmjs.org 在国内网络下经常超时（实测反馈"pnpm 连不上"）。
+     * 淘宝源为国内通用镜像，可被进程环境变量覆盖（见 buildEnv 的 filterNot 守卫）。
+     */
+    private const val NPM_REGISTRY_MIRROR = "https://registry.npmmirror.com"
 }

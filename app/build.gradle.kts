@@ -25,7 +25,6 @@ android {
         targetSdk = 28
         versionCode = 103
         versionName = "1.3.6-lan"
-
         ndk {
             abiFilters += listOf(targetAbi)
         }

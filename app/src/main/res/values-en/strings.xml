@@ -12,7 +12,6 @@
     <string name="status_backoff">Process exited unexpectedly, restarting in %1$d s (attempt %2$d)</string>
     <string name="status_failed">Start failed: %1$s</string>
     <string name="btn_restart">Restart</string>
-    <string name="btn_lan">LAN</string>
     <string name="btn_start_engine">Start engine</string>
     <string name="btn_hide">Hide</string>
     <string name="btn_back">← Home</string>
@@ -84,10 +83,6 @@
     <string name="setting_priv_mode_sub">Defines which system capabilities the AI can reach; engine restarts on change</string>
     <string name="setting_root_status">Root capability</string>
     <string name="setting_root_sub">Run the engine as root via su, giving the AI system-level access (requires a rooted device); engine restarts on change</string>
-    <string name="setting_root_sub_tap">Tap to run su for real (your root manager will ask for permission)</string>
-    <string name="setting_root_probing">Verifying root (tap Allow if prompted)…</string>
-    <string name="setting_root_probe_ok">Root verified — superuser access works</string>
-    <string name="setting_root_probe_fail">Root verification failed: su did not return uid=0. Check that your root manager has granted this app, or that the device really is rooted</string>
     <string name="setting_root_status_yes">su detected</string>
     <string name="setting_root_status_no">No su detected</string>
     <string name="setting_shizuku_status">Shizuku status</string>
@@ -199,7 +194,12 @@ They will be re-downloaded and reinstalled (with dependency closures). If a "per
     <string name="notif_granted">Granted</string>
     <string name="notif_denied">Not granted · tap to enable</string>
 
-    <!-- LAN access mode -->
+    <!-- 局域网访问 / Root / 思考强度（本 fork 新增） -->
+    <string name="btn_lan">LAN</string>
+    <string name="setting_root_sub_tap">Tap to run su for real (your root manager will ask for permission)</string>
+    <string name="setting_root_probing">Verifying root (tap Allow if prompted)…</string>
+    <string name="setting_root_probe_ok">Root verified — superuser access works</string>
+    <string name="setting_root_probe_fail">Root verification failed: su did not return uid=0. Check that your root manager has granted this app, or that the device really is rooted</string>
     <string name="setting_lan">LAN access</string>
     <string name="setting_lan_sub">Let other devices on the same Wi-Fi open this agent in a browser</string>
     <string name="lan_on">Enabled</string>
@@ -233,8 +233,6 @@ Current address:
     <string name="lan_no_auth_on">Enabled</string>
     <string name="lan_no_auth_off">Disabled</string>
     <string name="lan_no_auth_disable">Require token</string>
-
-    <!-- 模型：默认思考强度（本 fork 新增） -->
     <string name="settings_section_model">Model</string>
     <string name="setting_default_reasoning">Default reasoning effort</string>
     <string name="setting_default_reasoning_sub">Give every model a reasoning-effort selector (hand-declared models have none by default)</string>
@@ -245,3 +243,4 @@ This changes what gets sent to the provider: if a provider rejects the parameter
 
 If you only use providers that already declare their levels, you do not need this.</string>
 </resources>
+

@@ -214,7 +214,7 @@
     <string name="notif_agent_prefix">Agent · %1$s：%2$s</string>
     <string name="error_engine_start">引擎启动失败：%1$s</string>
 
-    <!-- 局域网访问 / Root 检测（本 fork 新增） -->
+    <!-- 局域网访问 / Root / 思考强度（本 fork 新增） -->
     <string name="btn_lan">局域网</string>
     <string name="setting_root_sub_tap">点击此行真跑一次 su 验证（会弹出 Root 授权框）</string>
     <string name="setting_root_probing">正在验证 Root（如弹出授权框请点「允许」）…</string>
@@ -253,8 +253,6 @@
     <string name="lan_no_auth_on">已开启</string>
     <string name="lan_no_auth_off">已关闭</string>
     <string name="lan_no_auth_disable">关闭免 token</string>
-
-    <!-- 模型：默认思考强度（本 fork 新增） -->
     <string name="settings_section_model">模型</string>
     <string name="setting_default_reasoning">默认开启思考强度</string>
     <string name="setting_default_reasoning_sub">给每个模型都补上思考强度选择（手工声明的模型默认没有）</string>
@@ -265,3 +263,4 @@
 
 只用官方/自带档位的供应商的话，不需要打开这个开关。</string>
 </resources>
+
