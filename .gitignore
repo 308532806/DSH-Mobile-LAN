@@ -24,3 +24,6 @@ _debcheck/
 # Python 字节码缓存
 __pycache__/
 *.pyc
+
+# 内置插件（CI 从 npm 取固定版本铺进来，二进制不进仓库）
+app/src/main/assets/plugins/

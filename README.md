@@ -4,7 +4,7 @@
 **在手机上跑 DeepSeek Harness，同一 Wi-Fi 下的任何设备用浏览器直接打开使用。**
 
 [![CI](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml/badge.svg)](https://github.com/308532806/DSH-Mobile-LAN/actions/workflows/android-build.yml)
-![Release](https://img.shields.io/badge/release-v1.3.12--lan-blue)![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-green)
+![Release](https://img.shields.io/badge/release-v1.3.13--lan-blue)![Platform](https://img.shields.io/badge/platform-Android%208.0%2B-green)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
 
 ---
@@ -198,7 +198,29 @@ dsh 把「思考强度」当作**每个模型自己声明的能力**：
 之所以默认关闭：这会改变**发往供应商的请求形态** —— 若对方不认这个参数，
 选了档位的请求会被拒绝（改回「关闭」即恢复），所以应该由用户显式打开。
 
-### 9. Root 检测修正
+### 9. 内置插件：提示词润色（dsh-prompt-polish）
+
+输入框旁多了一个 **✨ 润色** 按钮：点一下把你写的提示词改写成结构更好的版本
+（可写回、可直接发送），带版本链、本地历史与 token 用量显示。
+
+来源：[benrong2048-boop/dsh-prompt-polish](https://github.com/benrong2048-boop/dsh-prompt-polish)
+（npm `@benrong/dsh-prompt-polish@0.2.3`）。
+
+**集成方式**（本地起引擎实测确定）：
+
+- 插件包随 APK 打包（CI 从 npm 取固定版本、**按 sha256 校验**后铺进 assets），
+  首次启动由 App 复制到 `dsh-home/profiles/web/node_modules/`；
+- 激活靠已有的 `android-overlay.yml` 追加一条 insert 行 —— 只有插件**确实就位**时才写，
+  否则引擎会去加载一个不存在的包；
+- 实测两个坑：插件**必须放 profile 的 node_modules**（放引擎的 `lib/node_modules`
+  会 `failed to import`）；宿主端只依赖 node 内置模块（react 那些 peer 是浏览器端用的）。
+- 外观：按钮自带金色渐变，面板/对话框则沿用 WebUI 主题变量，所以深浅色都不突兀。
+
+> ⚠️ **许可**：该插件是 **AGPL-3.0**（本项目是 MIT）。它作为**独立模块**随包分发、
+> 源码未作任何修改，包内 LICENSE 原样保留。若你要再分发本 APK，请留意 AGPL 的
+> 相应义务（向使用者提供对应源码等）。
+
+### 10. Root 检测修正
 
 原项目的 root 检测只 stat 一组写死的 su 路径。真机实测（OPPO / Android 12 / Magisk alpha）
 上这些路径**全都不存在**：su 由 magic mount 挂到 `/product/bin/su` 与 `/debug_ramdisk/su`
@@ -227,7 +249,7 @@ dsh 把「思考强度」当作**每个模型自己声明的能力**：
 
 ```bash
 # 触发方式：推送 tag
-git tag v1.3.12-lan && git push origin v1.3.12-lan
+git tag v1.3.13-lan && git push origin v1.3.13-lan
 ```
 
 CI 流水线（`.github/workflows/android-build.yml`）会：

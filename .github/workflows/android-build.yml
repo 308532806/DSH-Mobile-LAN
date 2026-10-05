@@ -189,6 +189,27 @@ jobs:
             app/src/main/assets/runtime/MANIFEST.json > /tmp/m.json
           mv /tmp/m.json app/src/main/assets/runtime/MANIFEST.json
 
+      # 内置插件：dsh-prompt-polish（输入框旁的「✨ 润色」按钮）。
+      # 与运行时一样从 npm 取固定版本、按 sha256 校验后铺进 assets —— 二进制不进仓库。
+      # ⚠️ 该插件是 AGPL-3.0（本项目 MIT）：它作为独立模块随包分发，不修改其源码，
+      #    LICENSE 原样保留在包内；发布说明里也标了这一点。
+      - name: 准备内置插件（dsh-prompt-polish）
+        run: |
+          curl -fsSL -o /tmp/pp.tgz \
+            "https://registry.npmjs.org/@benrong/dsh-prompt-polish/-/dsh-prompt-polish-0.2.3.tgz"
+          echo "8c60b4a827c51a1b17f9ce09c677c3ded16eb8d39a45064a0d30fe911588d930  /tmp/pp.tgz" \
+            | sha256sum -c - \
+            || { echo "::error::插件包校验失败（上游可能改了同版本的内容）"; exit 1; }
+          rm -rf /tmp/ppx app/src/main/assets/plugins/dsh-prompt-polish
+          mkdir -p /tmp/ppx app/src/main/assets/plugins/dsh-prompt-polish
+          tar xzf /tmp/pp.tgz -C /tmp/ppx
+          cp -a /tmp/ppx/package/. app/src/main/assets/plugins/dsh-prompt-polish/
+          test -f app/src/main/assets/plugins/dsh-prompt-polish/lib/client.js \
+            || { echo "::error::插件文件缺失"; exit 1; }
+          test -f app/src/main/assets/plugins/dsh-prompt-polish/LICENSE \
+            || { echo "::error::插件 LICENSE 缺失（AGPL 要求保留）"; exit 1; }
+          echo "插件就绪：$(du -sh app/src/main/assets/plugins/dsh-prompt-polish | cut -f1)"
+
       - name: 安装 JDK 17
         uses: actions/setup-java@v4
         with:

@@ -249,6 +249,11 @@ class EngineSupervisor(private val ctx: Context) {
                 withContext(Dispatchers.IO) { AgentContextSeed.ensure(ctx) }
                 step("agent-seed")
 
+                // 内置插件（随 APK 打包）：铺进 profile 的 node_modules。
+                // 必须在 spawn 之前 —— overlay 里那行插件引用只在包已就位时才写。
+                withContext(Dispatchers.IO) { PluginInstaller.ensure(ctx) }
+                step("bundled-plugins")
+
                 // Agent 能力桥（v1.1.0）：notify/scr 的 HTTP 后端，全模式启动
                 withContext(Dispatchers.IO) { AgentBridge.start(ctx) }
                 step("bridge")

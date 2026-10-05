@@ -130,7 +130,7 @@ object EngineConfig {
             |- insert:
             |    - id: android-priv-mode
             |      name: ./android-plugins/priv-mode.mjs
-            |""".trimMargin()
+            |""".trimMargin() + bundledPluginRows(ctx)
         runCatching {
             if (!f.isFile || f.readText() != body) f.writeText(body)
         }
@@ -144,6 +144,27 @@ object EngineConfig {
             if (!dst.isFile || dst.readText() != text) dst.writeText(text)
         }.onFailure { Log.w(TAG, "priv-mode plugin deploy failed: ${it.message}") }
         return f
+    }
+
+    /**
+     * 内置插件在 overlay 里的引用行。
+     *
+     * 只有插件**确实铺到位**时才写 —— 否则引擎会去加载一个不存在的包，
+     * 启动日志里多一条 `failed to import`（功能上没有影响，但会让人以为坏了）。
+     * 换行开头先补一个空行，保持 YAML 文档之间的分隔。
+     */
+    private fun bundledPluginRows(ctx: android.content.Context): String {
+        val rows = StringBuilder()
+        for ((assetName, pkgName) in listOf("dsh-prompt-polish" to "@benrong/dsh-prompt-polish")) {
+            if (PluginInstaller.isInstalled(ctx, assetName)) {
+                // overlay 顶层是一个 patch 条目序列；这里再追加一个 insert 条目即可
+                // （与上面 priv-mode 那段并列，不是新文档）。
+                rows.append("\n|- insert:\n|    - id: prompt-polish\n|      name: \"")
+                    .append(pkgName)
+                    .append("\"\n")
+            }
+        }
+        return if (rows.isEmpty()) "" else rows.toString().trimMargin()
     }
 
     /**
