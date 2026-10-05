@@ -41,6 +41,18 @@ jobs:
           git remote add upstream https://github.com/Soodok/Deepseek-Harness-Local-Android.git 2>/dev/null || true
           git fetch upstream --tags --force
           git fetch upstream main
+          # ⚠️ 上游在 2026-10-04 左右改写过历史（统一 LF 行尾那类操作会让所有 SHA 变化），
+          # 本 fork 与它已**无共同祖先** —— 此时 merge 会把每个文件都当成「双方各自新增」，
+          # 必然全冲突。检测到这种情况就明确报告并停止，不再每 6 小时报一次红。
+          BASE=$(git merge-base HEAD upstream/main || true)
+          if [ -z "$BASE" ]; then
+            echo "no_ancestor=1" >> "$GITHUB_OUTPUT"
+            echo "up_to_date=1" >> "$GITHUB_OUTPUT"
+            echo "上游改写过历史，本 fork 与其已无共同祖先 —— 自动合并不可用"
+            git log --oneline upstream/main | head -8
+            exit 0
+          fi
+          echo "no_ancestor=0" >> "$GITHUB_OUTPUT"
           if git merge-base --is-ancestor upstream/main HEAD; then
             echo "up_to_date=1" >> "$GITHUB_OUTPUT"
             echo "上游无新提交"
@@ -129,7 +141,18 @@ jobs:
           {
             echo "### upstream-sync 结果"
             echo ""
-            if [ "${{ steps.fetch.outputs.up_to_date }}" = "1" ]; then
+            if [ "${{ steps.fetch.outputs.no_ancestor }}" = "1" ]; then
+              echo "⚠️ **上游改写过 git 历史，本 fork 与其已无共同祖先。**"
+              echo ""
+              echo "自动合并不可用（git merge 会把每个文件都当成双方各自新增，必然全冲突）。"
+              echo "需要同步时，把本 fork 的改动重新应用到上游的树上（这是人工步骤，"
+              echo "在对话里让 AI 处理即可）。"
+              echo ""
+              echo "上游最近提交："
+              echo '```'
+              git log --oneline upstream/main | head -10
+              echo '```'
+            elif [ "${{ steps.fetch.outputs.up_to_date }}" = "1" ]; then
               echo "- 上游无新提交，未做任何改动"
             else
               echo "- 已合并上游 main 并推送"
@@ -138,3 +161,6 @@ jobs:
               echo "- 已发布 **v${{ steps.rel.outputs.new_version }}**（对应上游 ${{ steps.rel.outputs.up_tag }}）"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.fetch.outputs.no_ancestor }}" = "1" ]; then
+            echo "::warning::上游改写过历史，自动同步不可用 —— 需要人工把本 fork 的改动重新落到上游树上"
+          fi
