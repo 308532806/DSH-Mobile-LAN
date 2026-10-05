@@ -93,7 +93,8 @@ object EngineConfig {
             |# sandbox. The user can still pick a stricter per-session preset in the WebUI.
             |#
             |# DSH_PERMISSION_MODE=danger-full-access is also exported (see buildEnv) so the
-            |# upstream expressions agree with this layer; these rows are the authority.            |- id: sandbox-policy
+            |# upstream expressions agree with this layer; these rows are the authority.
+            |- id: sandbox-policy
             |  config:
             |    mode: danger-full-access
             |    workspaceRoot: !!js process.cwd()

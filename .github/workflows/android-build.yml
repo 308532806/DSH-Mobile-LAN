@@ -41,6 +41,14 @@ jobs:
       - name: 校验局域网地址挑选逻辑
         run: node scripts/test-lan-pick.js
 
+      # overlay 是运行时才生成的 YAML，一个丢掉的换行就会让引擎起不来，
+      # 而编译期完全看不出来（原始字符串里少个换行仍是合法 Kotlin）。
+      # 实测事故：v1.3.7 因此无限重启。
+      - name: 校验 android-overlay.yml 能解析
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 scripts/test-android-overlay.py
+
       - name: 收集 Termux Node 运行时（${{ matrix.termux_arch }}）
         run: |
           sudo apt-get update -qq
