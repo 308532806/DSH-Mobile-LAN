@@ -630,6 +630,16 @@ rm -rf "$ROOT/lib/node_modules/sherpa-onnx-linux-x64" \
        "$ROOT/lib/node_modules/@img/sharp-libvips-linux-x64" \
        "$ROOT/lib/node_modules/node-addon-require-builtin-linux-x64-gnu" 2>/dev/null || true
 
+# ---- 4.6 裁剪「谁都不需要」的库副本（scripts/trim-runtime-libs.py）----
+# Termux 的 deb 里 ICU 这类库是「软链 + 真身」好几个名字，而 Android SELinux
+# 不允许普通应用创建软/硬链接 → 解包器只能把软链解引用成多份实体
+# （libicudata 一个库就 3 × 31.6MB = 94MB）。
+# Android linker 是按 NEEDED 里记录的**精确文件名**查找的，所以没被任何 ELF
+# NEEDED 到的副本纯属占地方。本步骤解压后省 86MB、压缩后省约 34MB。
+# 脚本自带断言：若删掉了「原本存在且被需要」的库，立即失败（构建红），
+# 不会等到真机上 CANNOT LINK。
+python3 "$SCRIPTS_DIR/trim-runtime-libs.py" "$ROOT" || exit 1
+
 # ---- 5. 打 zip ----
 ( cd "$ROOT" && zip -qr "$OUT_ZIP" . )
 
