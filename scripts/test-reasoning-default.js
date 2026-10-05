@@ -65,8 +65,9 @@ console.log('=== 场景 1：开关打开（应为所有模型补上思考档位�
         && r.thinkingLevelMap.medium === 'medium'
         && r.thinkingLevelMap.high === 'high', 'low/medium/high 有 wire 值');
   check(!('off' in (r.thinkingLevelMap || {})), 'off 有意缺席（=支持，发送时不带该参数）');
-  check(!('xhigh' in (r.thinkingLevelMap || {})) && !('max' in (r.thinkingLevelMap || {})),
-        'xhigh/max 不声明');
+  check(r.thinkingLevelMap.xhigh === 'xhigh' && r.thinkingLevelMap.max === 'max',
+        'xhigh/max 也要给出（pi-ai 对这两档是"缺席即不支持"，必须显式列出）');
+  check(r.thinkingLevelMap.minimal === 'minimal', 'minimal 也在档位里');
 }
 
 console.log('=== 场景 2：开关关闭（必须与上游逐字一致）===');
