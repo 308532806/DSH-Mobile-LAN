@@ -45,6 +45,8 @@ jobs:
           # 本 fork 与它已**无共同祖先** —— 此时 merge 会把每个文件都当成「双方各自新增」，
           # 必然全冲突。检测到这种情况就明确报告并停止，不再每 6 小时报一次红。
           BASE=$(git merge-base HEAD upstream/main || true)
+          echo "诊断: HEAD=$(git rev-parse --short HEAD) upstream/main=$(git rev-parse --short upstream/main)"
+          echo "诊断: merge-base 结果='$BASE'"
           if [ -z "$BASE" ]; then
             echo "no_ancestor=1" >> "$GITHUB_OUTPUT"
             echo "up_to_date=1" >> "$GITHUB_OUTPUT"
