@@ -167,6 +167,15 @@ jobs:
             || { echo "::error::客户端环回判定被破坏"; exit 1; }
           node --check /tmp/wcl.js \
             || { echo "::error::注入后的 dsh-client-connection/lib/client.js 语法错误"; exit 1; }
+          # 附件上传补丁（v1.3.18 真机排查）：两处修复都必须真的进 runtime.zip
+          unzip -p app/src/main/assets/runtime.zip \
+            'lib/node_modules/@deepseek-ai/dsh-attachment-local/lib/index.js' > /tmp/attl.js
+          grep -q 'removeTemporary(staged.path);' /tmp/attl.js \
+            || { echo "::error::附件上传补丁缺失（rename 别名下 unlink→removeTemporary）—— Android 上传必失败"; exit 1; }
+          grep -q 'error.code === "EINVAL"' /tmp/attl.js \
+            || { echo "::error::附件上传补丁缺失（erofs 目录 fsync 容错）—— Android 上传必失败"; exit 1; }
+          node --check /tmp/attl.js \
+            || { echo "::error::注入后的 dsh-attachment-local/lib/index.js 语法错误"; exit 1; }
           # 默认思考档位补丁：必须真的进了 runtime.zip，且行为正确
           unzip -p app/src/main/assets/runtime.zip \
             'lib/node_modules/@deepseek-ai/dsh-llm-pi-ai/lib/index.js' > /tmp/wr.js

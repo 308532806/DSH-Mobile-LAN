@@ -230,14 +230,28 @@ else
   echo "note: @deepseek-ai/node-addon-system absent, flock patch skipped"
 fi
 
-# [dsh-attachment-local] 同 session-persistence：0.2.0 里 link 被实际调用
-# （附件暂存→目标两处），Android 上硬链接 EACCES → rename as link 别名导入。
+# [dsh-attachment-local] 三处 Android 适配（后两处为 v1.3.18 真机排查补齐）：
+# 1) 硬链接：0.2.0 里 link 被实际调用（附件暂存→目标），Android SELinux 禁
+#    普通 App 建硬链接（EACCES）→ rename as link 别名导入（rename 具备原子
+#    发布语义，是合法替代）。
+#    ⚠️ 别名改变了「源文件是否保留」的语义：publishStagedObject 在 link 后还有
+#    await unlink(staged.path)（hardlink 语义下源仍在）；rename 后源已移走 →
+#    unlink 必然 ENOENT → 附件上传必失败（v1.3.18 真机排查第二根因）。
+#    故把该处 unlink 换成本文件已有的 removeTemporary()（容忍 ENOENT 的
+#    unlink；rename 与真 hardlink 两种语义下都安全）。
+# 2) 目录 fsync：ensureDurableHome 会逐级 fsync 祖先目录直到文件系统根，
+#    而 Android 的 "/" 是 erofs 只读分区（目录无 fsync 操作）→ fsync("/") 报
+#    EINVAL → 附件上传必失败（v1.3.18 真机排查第一根因）。目录 fsync 只是
+#    「尽力而为」的持久化保障，只读挂载的目录项不可能有未落盘变化，容忍
+#    EINVAL 安全；其它 errno（真实故障）照旧上抛。
 NAL="$NM/@deepseek-ai/dsh-attachment-local/lib/index.js"
 if [ -f "$NAL" ]; then
   node -e '
 const fs = require("fs");
 const p = process.argv[1];
 let s = fs.readFileSync(p, "utf8");
+
+// 1) 硬链接 → rename 别名
 const oldImport = "import { chmod, link, mkdir, open, readFile, rename, rm, unlink, writeFile } from \"node:fs/promises\";";
 const newImport = "import { chmod, rename as link, mkdir, open, readFile, rename, rm, unlink, writeFile } from \"node:fs/promises\";";
 if (!s.includes(oldImport)) {
@@ -245,8 +259,31 @@ if (!s.includes(oldImport)) {
   process.exit(1);
 }
 s = s.replace(oldImport, newImport);
+
+// 2) 目录 fsync 容错（erofs 上 fsync("/") -> EINVAL）
+const syncOld = "\tconst handle = await open(path, constants.O_RDONLY);\n\ttry {\n\t\tawait handle.sync();\n\t} finally {\n\t\tawait handle.close();\n\t}";
+const syncNew = "\tconst handle = await open(path, constants.O_RDONLY);\n\ttry {\n\t\t/* [dsh-android] Android 只读系统分区（erofs）的目录不支持 fsync：fsync(\"/\") -> EINVAL（内核 vfs_fsync_range: !f_op->fsync）。目录 fsync 只是「尽力而为」的持久化保障；只读挂载的目录项不可能有未落盘的变化，跳过安全。仅容忍 EINVAL，其它错误照旧上抛。 */\n\t\ttry {\n\t\t\tawait handle.sync();\n\t\t} catch (error) {\n\t\t\tif (!(error instanceof Error && \"code\" in error && error.code === \"EINVAL\")) throw error;\n\t\t}\n\t} finally {\n\t\tawait handle.close();\n\t}";
+if (!s.includes(syncOld)) {
+  console.error("attachment-local patch failed: syncDirectory shape changed");
+  process.exit(1);
+}
+s = s.replace(syncOld, syncNew);
+
+// 3) rename 语义下 staged 已移走：unlink -> removeTemporary（容忍 ENOENT）
+const unlinkOld = "\t\tawait unlink(staged.path);\n\t\tawait chmod(target, 256);";
+const unlinkNew = "\t\t/* [dsh-android] link 已别名为 rename：staged 已被移走，此处 unlink 必然 ENOENT。removeTemporary 容忍 ENOENT，兼容 rename 与真 hardlink 两种语义。 */\n\t\tawait removeTemporary(staged.path);\n\t\tawait chmod(target, 256);";
+if (!s.includes(unlinkOld)) {
+  console.error("attachment-local patch failed: unlink anchor changed");
+  process.exit(1);
+}
+s = s.replace(unlinkOld, unlinkNew);
+
 fs.writeFileSync(p, s);
-console.log("dsh-attachment-local patched ok: link -> rename (import alias)");
+if (!s.includes("rename as link") || !s.includes("error.code === \"EINVAL\"") || !s.includes("removeTemporary(staged.path)")) {
+  console.error("attachment-local patch failed: verification strings missing");
+  process.exit(1);
+}
+console.log("dsh-attachment-local patched ok: link->rename + fsync EINVAL tolerate + staged unlink->removeTemporary");
 ' "$NAL"
 else
   echo "note: dsh-attachment-local absent, patch skipped"

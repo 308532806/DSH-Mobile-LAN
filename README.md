@@ -259,6 +259,25 @@ dsh 把「思考强度」当作**每个模型自己声明的能力**：
 （会弹 Root 管理器的授权框），结果是权威的 —— 无论被动检测怎么说，用户都有办法自证。
 引导页在"未检测到"时，提示行同样可点重试。
 
+### 12. 附件上传修复（v1.3.18）
+
+Android 上给会话上传文件此前**必然失败**（浏览器里表现为"上传失败，点击重试"）。
+真机排查出**两个叠加的根因**：
+
+1. **目录 fsync 在 erofs 上返回 EINVAL**：附件的持久化逻辑会从存储目录逐级
+   fsync 祖先目录直到文件系统根，而 Android 的 `/` 是 erofs 只读分区（目录
+   不支持 fsync）→ `fsync("/")` 报 EINVAL → 上传中断。修复：**仅对 EINVAL
+   容忍**（只读挂载的目录项不可能有未落盘变化，跳过是安全的；其它 errno
+   照旧上抛）。
+2. **硬链接别名的 unlink 语义**：此前为绕开 Android 禁硬链接（SELinux EACCES）
+   把 `link()` 别名为 `rename()`；但上游代码在 link 之后还有 `unlink(staged)`
+   （hardlink 语义下源文件仍在），rename 后源已被移走 → unlink 报 ENOENT →
+   上传仍然失败。修复：该处改用文件内已有、容忍 ENOENT 的
+   `removeTemporary()`。
+
+两处均在构建期对 runtime 打补丁（`collect-termux-runtime.sh`），并新增
+构建期断言防止回退（补丁未生效会让构建直接失败）。
+
 ---
 
 ## 构建
